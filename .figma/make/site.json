@@ -1,0 +1,10 @@
+{
+  "description": "Securely manage your financial dashboard with interactive cards for balances, investments, and linked products, featuring smooth profile navigation and scrollable views.",
+  "robots": {
+    "index": false
+  },
+  "accessibility": {
+    "addBypassLinks": false,
+    "ignoreReducedMotion": false
+  }
+}
