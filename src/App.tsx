@@ -724,7 +724,7 @@ function AdminWorkspace({ onBack, conversationsByCustomer }: { onBack: () => voi
   const pageCount = Math.max(1, Math.ceil(filteredCustomers.length / customerPageSize));
   const visibleCustomers = filteredCustomers.slice(customerPage * customerPageSize, (customerPage + 1) * customerPageSize);
   const selectedCustomer = customers.find((customer) => customer.id === selectedCustomerId);
-  const liveTranscript: AdminMessage[] = selectedCustomer?.liveTurns.flatMap((turn) => [
+  const selectedLiveTranscript: AdminMessage[] = selectedCustomer?.liveTurns.flatMap((turn) => [
     { speaker: "Customer" as const, time: turn.timestamp, text: turn.query },
     { speaker: "Assistant" as const, time: turn.timestamp, text: turn.answer },
     ...(turn.supportOptionsOpened ? [{ speaker: "Customer" as const, time: turn.timestamp, text: "Talk to a person" }] : []),
@@ -732,8 +732,6 @@ function AdminWorkspace({ onBack, conversationsByCustomer }: { onBack: () => voi
     ...(turn.supportTransferConfirmed ? [{ speaker: "Assistant" as const, time: turn.timestamp, text: "The customer confirmed the Rainy Days transfer. Account balances were updated." }] : []),
     ...(turn.supportTransferCancelled ? [{ speaker: "Assistant" as const, time: turn.timestamp, text: "The customer cancelled the transfer. No balance changed." }] : []),
   ]) ?? [];
-  const totalConversations = customers.reduce((total, customer) => total + customer.conversations.length + (customer.liveTurns.length ? 1 : 0), 0);
-
   return (
     <main className="admin-workspace">
       <header className="admin-header">
@@ -741,15 +739,10 @@ function AdminWorkspace({ onBack, conversationsByCustomer }: { onBack: () => voi
         <div className="admin-header-actions"><span className="admin-avatar">AD</span><strong>Admin</strong><button onClick={onBack} type="button">Sign out</button></div>
       </header>
       <section className="admin-content" id="admin-customers">
-        <div className="admin-page-heading"><div><span className="eyebrow">Support workspace</span><h1>Customers & conversations</h1><p>Select a customer to review their assistant conversation history.</p></div></div>
-        <div className="admin-stat-grid">
-          <article><small>Total customers</small><strong>{customers.length}</strong><span>Mock customer profiles</span></article>
-          <article><small>Conversations</small><strong>{totalConversations}</strong><span>Seeded and this-session chats</span></article>
-          <article><small>Active customers</small><strong>{customers.length}</strong><span>Available in this demo</span></article>
-        </div>
+        <div className="admin-page-heading"><div><span className="eyebrow">Support workspace</span><h1>Customer list</h1><p>Expand a customer to review their assistant conversations.</p></div></div>
         <section className="admin-customer-panel">
           <div className="admin-section-heading">
-            <div><h2>Customer list</h2><p>Search by customer name, ID, email, or reference.</p></div>
+            <div><h2>Customers</h2><p>Search by customer name, ID, email, or reference.</p></div>
             <span>{filteredCustomers.length.toLocaleString()} {filteredCustomers.length === 1 ? "customer" : "customers"}</span>
           </div>
           <div className="admin-customer-tools">
@@ -768,15 +761,29 @@ function AdminWorkspace({ onBack, conversationsByCustomer }: { onBack: () => voi
           <div className="admin-table-scroll">
             <table className="admin-customer-table">
               <thead><tr><th>Customer</th><th>Status</th><th>Last event</th><th>Messages</th><th>Last activity</th></tr></thead>
-              <tbody>{visibleCustomers.map((customer) => (
-                <tr className={selectedCustomerId === customer.id ? "is-selected" : ""} key={customer.id}>
-                  <td><button className="admin-customer-select" onClick={() => setSelectedCustomerId(customer.id)} type="button"><span className="admin-customer-avatar">{customer.firstName.slice(0, 1)}</span><span><strong>{customer.name}</strong><small>{customer.reference} · {customer.id}</small></span></button></td>
-                  <td><span className="admin-status"><i /> Active</span></td>
-                  <td className="admin-last-event">{customer.lastEvent}</td>
-                  <td>{customer.messageCount}</td>
-                  <td>{customer.lastActivity}</td>
-                </tr>
-              ))}{visibleCustomers.length === 0 && <tr><td className="admin-empty-search" colSpan={5}>No customers match “{customerSearch}”. Try another name, ID, or email.</td></tr>}</tbody>
+              <tbody>{visibleCustomers.map((customer) => {
+                const isSelected = selectedCustomerId === customer.id;
+                return (
+                  <tr className={isSelected ? "is-selected" : ""} key={customer.id}>
+                    <td>
+                      <button
+                        aria-expanded={isSelected}
+                        className="admin-customer-select"
+                        onClick={() => setSelectedCustomerId(isSelected ? null : customer.id)}
+                        type="button"
+                      >
+                        <span className="admin-customer-avatar">{customer.firstName.slice(0, 1)}</span>
+                        <span><strong>{customer.name}</strong><small>{customer.reference} · {customer.id}</small></span>
+                        <Icon name="chevron" size={15} />
+                      </button>
+                    </td>
+                    <td><span className="admin-status"><i /> Active</span></td>
+                    <td className="admin-last-event">{customer.lastEvent}</td>
+                    <td>{customer.messageCount}</td>
+                    <td>{customer.lastActivity}</td>
+                  </tr>
+                );
+              })}{visibleCustomers.length === 0 && <tr><td className="admin-empty-search" colSpan={5}>No customers match “{customerSearch}”. Try another name, ID, or email.</td></tr>}</tbody>
             </table>
           </div>
           <div className="admin-customer-pagination">
@@ -787,14 +794,46 @@ function AdminWorkspace({ onBack, conversationsByCustomer }: { onBack: () => voi
             </div>
           </div>
         </section>
-        {selectedCustomer && <section className="admin-transcript-panel" id="admin-conversations">
-          <div className="admin-transcript-heading"><div><span className="eyebrow">Customer {selectedCustomer.reference} · active</span><h2>Conversation transcript</h2><p>{selectedCustomer.firstName} {selectedCustomer.name.split(" ").at(-1)?.slice(0, 1)}.•• · {selectedCustomer.conversations.length + (selectedCustomer.liveTurns.length ? 1 : 0)} conversations · {selectedCustomer.messageCount} messages</p></div><button onClick={() => setSelectedCustomerId(null)} type="button">Close transcript <Icon name="close" size={15} /></button></div>
-          <div className="admin-conversation-list">
-            {selectedCustomer.liveTurns.length > 0 && <article className="admin-conversation-block"><div className="admin-conversation-meta"><strong>Current session</strong><time>{selectedCustomer.lastActivity}</time></div>{liveTranscript.map((message, index) => <div className="admin-transcript-message" key={`${message.time}-${index}`}><div><strong>{message.speaker}</strong><time>{message.time}</time></div><p>{message.text}</p></div>)}</article>}
-            {selectedCustomer.conversations.map((conversation) => <article className="admin-conversation-block" key={conversation.title}><div className="admin-conversation-meta"><strong>{conversation.title}</strong><time>{conversation.time}</time></div>{conversation.messages.map((message, index) => <div className="admin-transcript-message" key={`${message.time}-${index}`}><div><strong>{message.speaker}</strong><time>{message.time}</time></div><p>{message.text}</p></div>)}</article>)}
-          </div>
-          <div className="admin-audit"><strong>What the assistant did</strong>{["Consent checked", "Account context reviewed", "Guidance shown", "No money moved"].map((label) => <span key={label}><Icon name="check" size={14} /> {label}</span>)}</div>
-        </section>}
+        {selectedCustomer && (
+          <section className="admin-customer-panel admin-selected-conversations">
+            <div className="admin-section-heading">
+              <div>
+                <h2>{selectedCustomer.name} · Conversations</h2>
+                <p>{selectedCustomer.reference} · {selectedCustomer.id} · {selectedCustomer.messageCount} messages</p>
+              </div>
+              <button className="admin-close-conversations" onClick={() => setSelectedCustomerId(null)} type="button">
+                Close <Icon name="close" size={14} />
+              </button>
+            </div>
+            <div className="admin-selected-conversation-list">
+              {selectedCustomer.liveTurns.length > 0 && (
+                <article className="admin-conversation-block">
+                  <div className="admin-conversation-meta"><strong>Current session</strong><time>{selectedCustomer.lastActivity}</time></div>
+                  {selectedLiveTranscript.map((message, index) => (
+                    <div className="admin-transcript-message" key={`live-${message.time}-${index}`}>
+                      <div><strong>{message.speaker}</strong><time>{message.time}</time></div>
+                      <p>{message.text}</p>
+                    </div>
+                  ))}
+                </article>
+              )}
+              {selectedCustomer.conversations.map((conversation) => (
+                <article className="admin-conversation-block" key={conversation.title}>
+                  <div className="admin-conversation-meta"><strong>{conversation.title}</strong><time>{conversation.time}</time></div>
+                  {conversation.messages.map((message, index) => (
+                    <div className="admin-transcript-message" key={`${message.time}-${index}`}>
+                      <div><strong>{message.speaker}</strong><time>{message.time}</time></div>
+                      <p>{message.text}</p>
+                    </div>
+                  ))}
+                </article>
+              ))}
+              {!selectedCustomer.conversations.length && !selectedCustomer.liveTurns.length && (
+                <p className="admin-no-conversations">No conversations for this customer yet.</p>
+              )}
+            </div>
+          </section>
+        )}
         <button className="admin-back-login" onClick={onBack} type="button"><Icon name="back" size={15} /> Back to sign in</button>
       </section>
     </main>
@@ -1248,6 +1287,7 @@ function ChatTurnView({ accountBalance = "₹1,20,430", accountNumber = "4821 �
   const renderPocketCard = (pocket: Pocket) => (
     <div className="rainy-pocket" key={pocket.name}>
       <div className="rainy-pocket-head"><span><Icon name="deposit" size={18} /></span><div><small>Current savings pocket balance</small><strong>{pocket.name}</strong><p>{pocket.goal > 0 ? `${Math.min(100, Math.round((pocket.balance / pocket.goal) * 100))}% of ${formatRupees(pocket.goal)} goal` : "Flexible savings pocket"}</p></div><b>{formatRupees(pocket.name === "Rainy Days" ? turnRainyBalance : pocket.balance)}</b></div>
+      {pocket.name === "Rainy Days" && suggestedTransferAmount > 0 && <p className="rainy-pocket-impact">Adding {formatRupees(suggestedTransferAmount)} would bring Rainy Days to {formatRupees(turnRainyBalance + suggestedTransferAmount)} — {Math.min(100, Math.round(((turnRainyBalance + suggestedTransferAmount) / pocket.goal) * 100))}% of your {formatRupees(pocket.goal)} goal.</p>}
       {pocket.name === "Rainy Days" && <div className="rainy-pocket-actions"><button onClick={() => setPocketView("details")} type="button">View details</button><button disabled={suggestedTransferAmount === 0 || transferCompleted} onClick={() => setPocketView("transfer")} type="button">{transferCompleted ? "Transfer complete" : suggestedTransferAmount === 0 ? "No top-up suggested" : `Transfer ${formatRupees(suggestedTransferAmount)}`} {!transferCompleted && <Icon name="arrow" size={14} />}</button></div>}
     </div>
   );
@@ -1305,7 +1345,7 @@ function ChatTurnView({ accountBalance = "₹1,20,430", accountNumber = "4821 �
           <TraceFlow complete={complete} progress={turn.visibleSteps} />
         </div>}
         {complete && (
-          <div className="workspace-answer">
+          <div className={`workspace-answer ${showInvestmentGuidance ? "investment-guidance-answer" : ""}`}>
             <p>{turn.answer.replace("CLICK HERE", "")}</p>
             {transferRequest && <div className="rainy-pocket transfer-request-pocket">
               <div className="rainy-pocket-head"><span><Icon name="deposit" size={18} /></span><div><small>Current savings pocket balance</small><strong>Rainy Days</strong></div><b>{formatRupees(turnRainyBalance)}</b></div>
@@ -1347,29 +1387,35 @@ function ChatTurnView({ accountBalance = "₹1,20,430", accountNumber = "4821 �
                 {supportTransferStatus === "cancelled" && <p className="support-request-confirmation" role="status">Transfer cancelled. Your balances are unchanged.</p>}
               </div>}
             </div>}
-            {showInvestmentGuidance && <div className="investment-context">
-              <span><small>Available in savings</small><strong>{formatRupees(availableSavings)}</strong></span>
-              <p>Keep at least ₹50,000 accessible{personalLoan ? ` and reserve ${formatRupees(loanReserve)} for your upcoming EMI` : ""}. Recommendations reflect your current account and existing investments.</p>
+            {showInvestmentGuidance && <div className="investment-guidance-columns">
+              <div className="investment-guidance-column">
+                <div className="investment-context">
+                  <span><small>Available in savings</small><strong>{formatRupees(availableSavings)}</strong></span>
+                  <p>Keep at least ₹50,000 accessible{personalLoan ? ` and reserve ${formatRupees(loanReserve)} for your upcoming EMI` : ""}. Recommendations reflect your current account and existing investments.</p>
+                </div>
+                {(currentFixedDeposits || currentRecurringDeposit || currentMutualFunds || currentPersonalLoan) && <div className="existing-investments">
+                  <div className="existing-investments-heading"><strong>Your current investments</strong><small>Suggestions build on what you already hold</small></div>
+                  <div className="existing-investment-list">
+                    {currentFixedDeposits && <div><span className="product-icon product-icon-gold"><Icon name="deposit" size={16} /></span><span><strong>Fixed deposits</strong><small>Current holding</small></span><b>{currentFixedDeposits.amount.trim()}</b></div>}
+                    {currentRecurringDeposit && <div><span className="product-icon product-icon-coral"><Icon name="repeat" size={16} /></span><span><strong>Recurring deposit</strong><small>{monthlyContribution(currentRecurringDeposit) ? `Continue ${monthlyContribution(currentRecurringDeposit)} instalments` : "Current holding"}</small></span><b>{currentRecurringDeposit.amount.trim()}</b></div>}
+                    {currentMutualFunds && <div><span className="product-icon product-icon-violet"><Icon name="fund" size={16} /></span><span><strong>Mutual funds</strong><small>Review before adding another SIP</small></span><b>{currentMutualFunds.amount.trim()}</b></div>}
+                    {currentPersonalLoan && <div><span className="product-icon product-icon-blue"><Icon name="card" size={16} /></span><span><strong>Personal loan</strong><small>{formatRupees(PERSONAL_LOAN_EMI)} EMI · due {PERSONAL_LOAN_NEXT_DUE}</small></span><b>{currentPersonalLoan.amount.trim()}</b></div>}
+                  </div>
+                </div>}
+              </div>
+              <div className="investment-guidance-column">
+                <div className="recommendation-card">
+                  <div className="recommendation-head"><span><Icon name="deposit" size={18} /></span><div><small>Suggested allocation</small><strong>{fixedDepositAmount ? "Additional Fixed Deposit" : "Keep your buffer liquid"}</strong></div><b>{formatRupees(fixedDepositAmount)}</b></div>
+                  {fixedDepositAmount > 0 && <div className="recommendation-facts"><span><small>Tenure</small><strong>6 months</strong></span><span><small>Interest rate</small><strong>7.25% p.a.</strong></span><span><small>Est. interest</small><strong>~{formatRupees(fixedDepositInterest)}</strong></span><span><small>Est. maturity</small><strong>~{formatRupees(fixedDepositMaturity)}</strong></span></div>}
+                  <p><Icon name="chart" size={14} /> Indicative estimate only; actual rates and returns depend on the selected deposit terms.</p>
+                </div>
+                {visiblePockets.filter((pocket) => pocket.name === "Rainy Days").map(renderPocketCard)}
+              </div>
             </div>}
-            {(showInvestmentGuidance || showLoanGuidance) && personalLoan && <div className="loan-context-card">
+            {showLoanGuidance && personalLoan && <div className="loan-context-card">
               <div><span><Icon name="card" size={16} /></span><small>Personal loan outstanding</small><strong>{personalLoan.amount.trim()}</strong></div>
               <p><span>Monthly EMI <b>{formatRupees(PERSONAL_LOAN_EMI)}</b></span><span>Due <b>{PERSONAL_LOAN_NEXT_DUE}</b></span><span>{PERSONAL_LOAN_REMAINING_INSTALLMENTS} instalments left</span></p>
             </div>}
-            {showInvestmentGuidance && <div className="recommendation-card">
-              <div className="recommendation-head"><span><Icon name="deposit" size={18} /></span><div><small>Suggested allocation</small><strong>{fixedDepositAmount ? "Additional Fixed Deposit" : "Keep your buffer liquid"}</strong></div><b>{formatRupees(fixedDepositAmount)}</b></div>
-              {fixedDepositAmount > 0 && <div className="recommendation-facts"><span><small>Tenure</small><strong>6 months</strong></span><span><small>Interest rate</small><strong>7.25% p.a.</strong></span><span><small>Est. interest</small><strong>~{formatRupees(fixedDepositInterest)}</strong></span><span><small>Est. maturity</small><strong>~{formatRupees(fixedDepositMaturity)}</strong></span></div>}
-              <p><Icon name="chart" size={14} /> Indicative estimate only; actual rates and returns depend on the selected deposit terms.</p>
-            </div>}
-            {showInvestmentGuidance && (currentFixedDeposits || currentRecurringDeposit || currentMutualFunds || currentPersonalLoan) && <div className="existing-investments">
-              <div className="existing-investments-heading"><strong>Your current investments</strong><small>Suggestions build on what you already hold</small></div>
-              <div className="existing-investment-list">
-                {currentFixedDeposits && <div><span className="product-icon product-icon-gold"><Icon name="deposit" size={16} /></span><span><strong>Fixed deposits</strong><small>Current holding</small></span><b>{currentFixedDeposits.amount.trim()}</b></div>}
-                {currentRecurringDeposit && <div><span className="product-icon product-icon-coral"><Icon name="repeat" size={16} /></span><span><strong>Recurring deposit</strong><small>{monthlyContribution(currentRecurringDeposit) ? `Continue ${monthlyContribution(currentRecurringDeposit)} instalments` : "Current holding"}</small></span><b>{currentRecurringDeposit.amount.trim()}</b></div>}
-                {currentMutualFunds && <div><span className="product-icon product-icon-violet"><Icon name="fund" size={16} /></span><span><strong>Mutual funds</strong><small>Review before adding another SIP</small></span><b>{currentMutualFunds.amount.trim()}</b></div>}
-                {currentPersonalLoan && <div><span className="product-icon product-icon-blue"><Icon name="card" size={16} /></span><span><strong>Personal loan</strong><small>{formatRupees(PERSONAL_LOAN_EMI)} EMI · due {PERSONAL_LOAN_NEXT_DUE}</small></span><b>{currentPersonalLoan.amount.trim()}</b></div>}
-              </div>
-            </div>}
-            {showInvestmentGuidance && visiblePockets.filter((pocket) => pocket.name === "Rainy Days").map(renderPocketCard)}
             {showPocketGuidance && visiblePockets.map(renderPocketCard)}
             <div className="answer-disclaimer"><Icon name="lock" size={15} /> Equitas AI provides general information. Review the details before making a financial decision.</div>
           </div>
@@ -1777,6 +1823,10 @@ function Dashboard({ onLogout, setChatTurns, chatTurns, user }: { onLogout: () =
   const userProducts = availableProducts.some((product) => product.type === "Personal loan")
     ? availableProducts
     : [...availableProducts, ...allProducts.filter((product) => product.type === "Personal loan")];
+  const productsPerPage = 4;
+  const productPageCount = Math.ceil(userProducts.length / productsPerPage);
+  const productPage = Math.floor(productIndex / productsPerPage);
+  const visibleProducts = userProducts.slice(productPage * productsPerPage, (productPage + 1) * productsPerPage);
   const profileProducts = userProducts;
   const pockets: Pocket[] = [{ name: "Rainy Days", balance: rainyBalance, goal: 50000 }, ...customPockets];
 
@@ -1813,22 +1863,38 @@ function Dashboard({ onLogout, setChatTurns, chatTurns, user }: { onLogout: () =
                 <div className="block-heading">
                   <div><span className="eyebrow">At a glance</span><h2>Your products</h2></div>
                   <div className="product-count">
+                    {productPageCount > 1 && (
+                      <div aria-label="Your products slides" className="quick-product-dots">
+                        {Array.from({ length: productPageCount }, (_, page) => (
+                          <button
+                            aria-label={`Show products slide ${page + 1}`}
+                            aria-pressed={page === productPage}
+                            className={page === productPage ? "active" : ""}
+                            key={page}
+                            onClick={() => setProductIndex(page * productsPerPage)}
+                            type="button"
+                          />
+                        ))}
+                      </div>
+                    )}
                     <span>{userProducts.length} linked</span>
-                    {userProducts.length > 4 && <button onClick={() => { setProfileDetail(null); setScrollProfileToProducts(true); setProfileOpen(true); }} type="button">+{userProducts.length - 4} more</button>}
                   </div>
                 </div>
                 <div className="quick-product-grid">
-                  {userProducts.slice(0, 4).map((product, index) => (
-                    <button
-                      className={index === productIndex ? "selected" : ""}
-                      key={product.type}
-                      onClick={() => { setProductIndex(index); setProfileDetail(product.type); setProfileOpen(true); }}
-                      type="button"
-                    >
-                      <span className={`product-icon product-icon-${product.tone}`}><Icon name={product.icon} /></span>
-                      <span><small>{product.type}</small><strong className={product.amount.length > 12 ? "long-product-value" : ""} title={product.amount}>{product.amount}</strong></span>
-                    </button>
-                  ))}
+                {visibleProducts.map((product, index) => {
+                  const productIndexOnList = productPage * productsPerPage + index;
+                  return (
+                  <button
+                    className={`quick-product-card ${productIndexOnList === productIndex ? "selected" : ""}`}
+                    key={product.type}
+                    onClick={() => { setProductIndex(productIndexOnList); setProfileDetail(product.type); setProfileOpen(true); }}
+                    type="button"
+                  >
+                    <span className={`product-icon product-icon-${product.tone}`}><Icon name={product.icon} /></span>
+                    <span><small>{product.type}</small><strong className={product.amount.length > 12 ? "long-product-value" : ""} title={product.amount}>{product.amount}</strong></span>
+                  </button>
+                  );
+                })}
                 </div>
               </div>
             </section>
