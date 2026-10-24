@@ -155,6 +155,65 @@ const mockUsers: MockUser[] = [
   { id: "444444444", name: "Kavya Srinivasan", firstName: "Kavya", email: "kavya.s@email.com", productCount: 6, dateOfBirth: "03 Feb 1996", gender: "Female", mobile: "+91 98200 34567", mailingAddress: "7, Residency Road, Bengaluru – 560025" },
 ];
 
+type RegisteredAccount = {
+  user: MockUser;
+  passwordSalt: string;
+  passwordHash: string;
+};
+
+const registeredAccountsStorageKey = "equitas-registered-accounts";
+
+function loadRegisteredAccounts(): RegisteredAccount[] {
+  const storedAccounts = window.localStorage.getItem(registeredAccountsStorageKey);
+  if (!storedAccounts) return [];
+
+  try {
+    const parsedAccounts: unknown = JSON.parse(storedAccounts);
+    if (!Array.isArray(parsedAccounts)) throw new Error("Stored accounts must be an array.");
+    const validAccounts = parsedAccounts.filter((account): account is RegisteredAccount => {
+      if (typeof account !== "object" || account === null) return false;
+      const candidate = account as Record<string, unknown>;
+      if (typeof candidate.passwordSalt !== "string" || typeof candidate.passwordHash !== "string") return false;
+      if (typeof candidate.user !== "object" || candidate.user === null) return false;
+      const profile = candidate.user as Record<string, unknown>;
+      return ["id", "name", "firstName", "email", "dateOfBirth", "gender", "mobile", "mailingAddress"].every(
+        (key) => typeof profile[key] === "string",
+      ) && typeof profile.productCount === "number";
+    });
+    if (validAccounts.length !== parsedAccounts.length) {
+      console.error("Some saved customer accounts are invalid and could not be loaded.");
+    }
+    return validAccounts;
+  } catch (error) {
+    console.error("Unable to read saved customer accounts.", error);
+    return [];
+  }
+}
+
+function bytesToHex(bytes: Uint8Array) {
+  return Array.from(bytes, (byte) => byte.toString(16).padStart(2, "0")).join("");
+}
+
+async function hashAccountPassword(password: string, salt: string) {
+  const passwordKey = await window.crypto.subtle.importKey(
+    "raw",
+    new TextEncoder().encode(password),
+    "PBKDF2",
+    false,
+    ["deriveBits"],
+  );
+  const derivedPassword = await window.crypto.subtle.deriveBits(
+    { name: "PBKDF2", salt: new TextEncoder().encode(salt), iterations: 120000, hash: "SHA-256" },
+    passwordKey,
+    256,
+  );
+  return bytesToHex(new Uint8Array(derivedPassword));
+}
+
+function normalizePhone(value: string) {
+  return value.replace(/\D/g, "");
+}
+
 const profileItems = [
   { title: "Personal details", subtitle: "Name, contact, address", icon: "user" as IconName },
   { title: "Bank account details", subtitle: "Account number, IFSC, branch", icon: "bank" as IconName },
@@ -176,17 +235,87 @@ function Logo({ light = false }: { light?: boolean }) {
   );
 }
 
-function Login({ onAdmin, onLogin }: { onAdmin: () => void; onLogin: (user: MockUser) => void }) {
+function Login({ onAdmin, onLogin, onRegister, registeredAccounts }: { onAdmin: () => void; onLogin: (user: MockUser) => void; onRegister: (user: MockUser, password: string) => Promise<string | null>; registeredAccounts: RegisteredAccount[] }) {
+  const [mode, setMode] = useState<"signin" | "signup">("signin");
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
-  const [customerId, setCustomerId] = useState(mockUsers[0].id);
+  const [password, setPassword] = useState("");
+  const [customerId, setCustomerId] = useState("");
+  const [fullName, setFullName] = useState("");
+  const [email, setEmail] = useState("");
+  const [mobile, setMobile] = useState("");
   const [loginNotice, setLoginNotice] = useState("");
 
-  function submit(event: FormEvent) {
+  async function submit(event: FormEvent) {
     event.preventDefault();
+    if (mode === "signup" && !fullName.trim()) {
+      setLoginNotice("Enter your full name to create your profile.");
+      return;
+    }
     setLoading(true);
-    const user = mockUsers.find((item) => item.id === customerId) ?? mockUsers[0];
-    window.setTimeout(() => onLogin(user), 450);
+    try {
+      if (mode === "signup") {
+        if (normalizePhone(mobile).length < 9) {
+          setLoginNotice("Enter a mobile number with at least 9 digits.");
+          setLoading(false);
+          return;
+        }
+        const user: MockUser = {
+          id: `new-${Date.now()}`,
+          name: fullName.trim(),
+          firstName: fullName.trim().split(/\s+/)[0],
+          email: email.trim(),
+          productCount: mockUsers[0].productCount,
+          dateOfBirth: "Not provided",
+          gender: "Not provided",
+          mobile: mobile.trim(),
+          mailingAddress: "Not provided",
+        };
+        const registrationError = await onRegister(user, password);
+        if (registrationError) {
+          setLoginNotice(registrationError);
+          setLoading(false);
+          return;
+        }
+        setLoginNotice("");
+        onLogin(user);
+        return;
+      }
+
+      const enteredId = customerId.trim().toLowerCase();
+      const enteredPhone = normalizePhone(customerId);
+      const registeredAccount = registeredAccounts.find(({ user }) =>
+        user.email.toLowerCase() === enteredId
+        || normalizePhone(user.mobile) === enteredPhone
+        || user.id.toLowerCase() === enteredId,
+      );
+      if (registeredAccount) {
+        const passwordHash = await hashAccountPassword(password, registeredAccount.passwordSalt);
+        if (passwordHash !== registeredAccount.passwordHash) {
+          setLoginNotice("The password is incorrect. Check it and try again.");
+          setLoading(false);
+          return;
+        }
+        setLoginNotice("");
+        onLogin(registeredAccount.user);
+        return;
+      }
+
+      const matchedUser = mockUsers.find((item) =>
+        item.id === enteredId || normalizePhone(item.mobile) === enteredPhone,
+      );
+      if (!matchedUser) {
+        setLoginNotice("We couldn’t find an account with those details. Check your email, customer ID, or mobile number and try again.");
+        setLoading(false);
+        return;
+      }
+      setLoginNotice("");
+      onLogin(matchedUser);
+    } catch (error) {
+      console.error("Unable to complete account access.", error);
+      setLoginNotice("We couldn’t complete that request securely. Please try again.");
+      setLoading(false);
+    }
   }
 
   return (
@@ -210,38 +339,69 @@ function Login({ onAdmin, onLogin }: { onAdmin: () => void; onLogin: (user: Mock
 
       <section className="login-form-side">
         <div className="mobile-logo"><Logo /></div>
-        <form className="login-card" onSubmit={submit}>
-          <div className="login-heading">
-            <span className="login-icon"><Icon name="lock" size={22} /></span>
-            <h2>Welcome back</h2>
-            <p>Sign in to continue to your dashboard.</p>
+        <form className={`login-card ${mode === "signup" ? "is-signup" : ""}`} onSubmit={submit}>
+          <div aria-label="Account access" className="auth-mode-switch" role="tablist">
+            <button aria-selected={mode === "signin"} className={mode === "signin" ? "active" : ""} onClick={() => { setMode("signin"); setLoginNotice(""); setPassword(""); }} role="tab" type="button">Sign in</button>
+            <button aria-selected={mode === "signup"} className={mode === "signup" ? "active" : ""} onClick={() => { setMode("signup"); setLoginNotice(""); setPassword(""); }} role="tab" type="button">Sign up</button>
           </div>
-          <label>
-            <span>Customer ID or mobile number</span>
-            <div className="field">
-              <Icon name="user" size={19} />
-              <input aria-label="Customer ID or mobile number" onChange={(event) => setCustomerId(event.target.value)} required value={customerId} />
-            </div>
-          </label>
+          <div className="login-heading">
+            <span className="login-icon"><Icon name={mode === "signin" ? "lock" : "user"} size={22} /></span>
+            <h2>{mode === "signin" ? "Welcome back" : "Create your account"}</h2>
+            <p>{mode === "signin" ? "Sign in to continue to your dashboard." : "Enter your details to get started."}</p>
+          </div>
+          {mode === "signup" ? (
+            <>
+              <label>
+                <span>Full name</span>
+                <div className="field">
+                  <Icon name="user" size={19} />
+                  <input autoComplete="name" aria-label="Full name" onChange={(event) => setFullName(event.target.value)} placeholder="Enter your full name" required value={fullName} />
+                </div>
+              </label>
+              <label>
+                <span>Email address</span>
+                <div className="field">
+                  <Icon name="mail" size={19} />
+                  <input autoComplete="email" aria-label="Email address" onChange={(event) => setEmail(event.target.value)} placeholder="name@example.com" required type="email" value={email} />
+                </div>
+              </label>
+              <label>
+                <span>Mobile number</span>
+                <div className="field">
+                  <Icon name="phone" size={19} />
+                  <input autoComplete="tel" aria-label="Mobile number" onChange={(event) => setMobile(event.target.value)} pattern="[+0-9() -]{9,}" placeholder="+91 98765 43210" required type="tel" value={mobile} />
+                </div>
+              </label>
+            </>
+          ) : (
+            <label>
+              <span>Email, customer ID, or mobile number</span>
+              <div className="field">
+                <Icon name="user" size={19} />
+                <input aria-label="Email, customer ID, or mobile number" autoComplete="username" onChange={(event) => setCustomerId(event.target.value)} placeholder="Enter email, customer ID, or mobile" required value={customerId} />
+              </div>
+            </label>
+          )}
           <label>
             <span>Password</span>
             <div className="field">
               <Icon name="lock" size={19} />
-              <input aria-label="Password" defaultValue="securepass" required type={showPassword ? "text" : "password"} />
+              <input aria-label="Password" autoComplete={mode === "signin" ? "current-password" : "new-password"} minLength={mode === "signup" ? 8 : undefined} onChange={(event) => setPassword(event.target.value)} required type={showPassword ? "text" : "password"} value={password} />
               <button aria-label="Show password" className="field-action" onClick={() => setShowPassword(!showPassword)} type="button">
                 <Icon name="eye" size={18} />
               </button>
             </div>
           </label>
-          <div className="form-options">
+          {mode === "signin" && <div className="form-options">
             <label className="remember"><input defaultChecked type="checkbox" /> Remember me</label>
             <button className="text-button" onClick={() => setLoginNotice("Password reset instructions sent to your registered contact.")} type="button">Forgot password?</button>
-          </div>
+          </div>}
           {loginNotice && <p className="login-notice"><Icon name="check" size={14} /> {loginNotice}</p>}
           <button className="primary-button" disabled={loading} type="submit">
-            {loading ? "Signing in..." : "Sign in securely"}
+            {loading ? (mode === "signin" ? "Signing in..." : "Creating account...") : (mode === "signin" ? "Sign in securely" : "Create account")}
             {!loading && <Icon name="arrow" size={18} />}
           </button>
+          {mode === "signup" && <p className="signup-demo-note">Your profile is saved on this device. Banking details shown are sample values.</p>}
           <p className="security-note"><Icon name="shield" size={16} /> 256-bit encrypted and securely protected</p>
           <button className="admin-entry-link" onClick={onAdmin} type="button">Admin</button>
         </form>
@@ -766,13 +926,14 @@ const seedAdminConversations: Record<string, AdminConversation[]> = {
   ],
 };
 
-function AdminWorkspace({ onBack, conversationsByCustomer, transfersByCustomer }: { onBack: () => void; conversationsByCustomer: Record<string, ChatTurn[]>; transfersByCustomer: Record<string, ChatTransfer[]> }) {
+function AdminWorkspace({ onBack, registeredAccounts, conversationsByCustomer, transfersByCustomer }: { onBack: () => void; registeredAccounts: RegisteredAccount[]; conversationsByCustomer: Record<string, ChatTurn[]>; transfersByCustomer: Record<string, ChatTransfer[]> }) {
   const [selectedCustomerId, setSelectedCustomerId] = useState<string | null>(null);
   const [selectedCustomerTab, setSelectedCustomerTab] = useState<"conversations" | "transfers">("conversations");
   const [customerSearch, setCustomerSearch] = useState("");
   const [customerPage, setCustomerPage] = useState(0);
   const customerPageSize = 10;
-  const customers = mockUsers.map((customer, index) => {
+  const allCustomers = [...mockUsers, ...registeredAccounts.map(({ user }) => user)];
+  const customers = allCustomers.map((customer, index) => {
     const liveTurns = conversationsByCustomer[customer.id] ?? [];
     const seeded = seedAdminConversations[customer.id] ?? [];
     return {
@@ -2118,7 +2279,6 @@ function Dashboard({ onLogout, onTransferRecorded, setChatTurns, chatTurns, user
   const [transferNotifications, setTransferNotifications] = useState<TransferNotification[]>([]);
   const [transferToast, setTransferToast] = useState<TransferNotification | null>(null);
   const [personalised, setPersonalised] = useState(() => window.localStorage.getItem(consentStorageKey) === "enabled");
-  const [consentPromptOpen, setConsentPromptOpen] = useState(() => window.localStorage.getItem(consentStorageKey) === null);
   const [productIndex, setProductIndex] = useState(0);
   const [profileDetail, setProfileDetail] = useState<string | null>(null);
   const [scrollProfileToProducts, setScrollProfileToProducts] = useState(false);
@@ -2195,7 +2355,6 @@ function Dashboard({ onLogout, onTransferRecorded, setChatTurns, chatTurns, user
   function updatePersonalisedConsent(enabled: boolean) {
     window.localStorage.setItem(consentStorageKey, enabled ? "enabled" : "disabled");
     setPersonalised(enabled);
-    setConsentPromptOpen(false);
   }
 
   function confirmInvestmentAllocation(allocation: InvestmentAllocation): InvestmentBalances | null {
@@ -2315,20 +2474,6 @@ function Dashboard({ onLogout, onTransferRecorded, setChatTurns, chatTurns, user
           <ChatPanel accountBalance={userProducts[0]?.amount ?? "₹1,20,430"} accountNumber={userProducts[0]?.number ?? "4821 •••• •••• 1234"} onConfirmAllocations={confirmInvestmentAllocation} onOpenConsent={openConsentSettings} onRainyTransfer={applyRainyDaysTransfer} onSupportUpdate={(turnId, field) => setChatTurns((current) => current.map((turn) => turn.id === turnId ? { ...turn, [field]: true } : turn))} pockets={pockets} personalised={personalised} products={userProducts} rainyBalance={rainyBalance} setTurns={setChatTurns} turns={chatTurns} user={user} />
         </div>
       </main>
-      {consentPromptOpen && (
-        <div className="consent-prompt-backdrop">
-          <section aria-labelledby="first-consent-title" aria-modal="true" className="first-consent-prompt" role="dialog">
-            <span className="first-consent-icon"><Icon name="shield" size={22} /></span>
-            <span className="eyebrow">Your choice, your control</span>
-            <h2 id="first-consent-title">Enable personalised insights?</h2>
-            <p>Allow AIdy to use your account balances, transactions and upcoming payments to provide relevant insights and suggestions. You can change this anytime in Profile → Consent.</p>
-            <div className="first-consent-actions">
-              <button className="first-consent-keep-off" onClick={() => updatePersonalisedConsent(false)} type="button">Keep insights off</button>
-              <button className="first-consent-enable" onClick={() => updatePersonalisedConsent(true)} type="button">Enable insights</button>
-            </div>
-          </section>
-        </div>
-      )}
       <ProfileDrawer
         initialDetail={profileDetail}
         key={`${user.id}-${profileDetail ?? "profile"}`}
@@ -2359,18 +2504,88 @@ function Dashboard({ onLogout, onTransferRecorded, setChatTurns, chatTurns, user
 export default function App() {
   const [user, setUser] = useState<MockUser | null>(null);
   const [adminOpen, setAdminOpen] = useState(false);
-  const [conversationsByCustomer, setConversationsByCustomer] = useState<Record<string, ChatTurn[]>>({});
-  const [transfersByCustomer, setTransfersByCustomer] = useState<Record<string, ChatTransfer[]>>({});
+  const [registeredAccounts, setRegisteredAccounts] = useState<RegisteredAccount[]>(loadRegisteredAccounts);
+  const [conversationsByCustomer, setConversationsByCustomer] = useState<Record<string, ChatTurn[]>>(() => {
+    const stored = window.localStorage.getItem("equitas-customer-conversations");
+    if (!stored) return {};
+    try {
+      const parsed: unknown = JSON.parse(stored);
+      if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) throw new Error("Stored conversations must be an object.");
+      return parsed as Record<string, ChatTurn[]>;
+    } catch (error) {
+      console.error("Unable to read saved customer conversations.", error);
+      return {};
+    }
+  });
+  const [transfersByCustomer, setTransfersByCustomer] = useState<Record<string, ChatTransfer[]>>(() => {
+    const stored = window.localStorage.getItem("equitas-customer-transfers");
+    if (!stored) return {};
+    try {
+      const parsed: unknown = JSON.parse(stored);
+      if (typeof parsed !== "object" || parsed === null || Array.isArray(parsed)) throw new Error("Stored transfers must be an object.");
+      return parsed as Record<string, ChatTransfer[]>;
+    } catch (error) {
+      console.error("Unable to read saved customer transfers.", error);
+      return {};
+    }
+  });
+  useEffect(() => {
+    try {
+      window.localStorage.setItem("equitas-customer-conversations", JSON.stringify(conversationsByCustomer));
+    } catch (error) {
+      console.error("Unable to save customer conversations.", error);
+    }
+  }, [conversationsByCustomer]);
+  useEffect(() => {
+    try {
+      window.localStorage.setItem("equitas-customer-transfers", JSON.stringify(transfersByCustomer));
+    } catch (error) {
+      console.error("Unable to save customer transfers.", error);
+    }
+  }, [transfersByCustomer]);
+
+  async function registerAccount(newUser: MockUser, password: string) {
+    const email = newUser.email.trim().toLowerCase();
+    const phone = normalizePhone(newUser.mobile);
+    const accountExists = registeredAccounts.some(({ user: existingUser }) =>
+      existingUser.email.toLowerCase() === email || normalizePhone(existingUser.mobile) === phone,
+    );
+    if (accountExists) return "An account with this email or mobile number already exists. Sign in instead.";
+
+    try {
+      const salt = bytesToHex(window.crypto.getRandomValues(new Uint8Array(16)));
+      const passwordHash = await hashAccountPassword(password, salt);
+      const nextAccounts = [...registeredAccounts, { user: newUser, passwordSalt: salt, passwordHash }];
+      window.localStorage.setItem(registeredAccountsStorageKey, JSON.stringify(nextAccounts));
+      setRegisteredAccounts(nextAccounts);
+      return null;
+    } catch (error) {
+      console.error("Unable to save the new customer account.", error);
+      return "We couldn’t save your account on this device. Please try again.";
+    }
+  }
+
+  function saveCustomerTurns(customerId: string, action: SetStateAction<ChatTurn[]>) {
+    setConversationsByCustomer((current) => {
+      return {
+        ...current,
+        [customerId]: typeof action === "function" ? action(current[customerId] ?? []) : action,
+      };
+    });
+  }
+
+  function recordCustomerTransfer(transfer: ChatTransfer) {
+    setTransfersByCustomer((current) => {
+      return { ...current, [transfer.customerId]: [...(current[transfer.customerId] ?? []), transfer] };
+    });
+  }
 
   if (user) {
     const setCustomerTurns: Dispatch<SetStateAction<ChatTurn[]>> = (action) => {
-      setConversationsByCustomer((current) => ({
-        ...current,
-        [user.id]: typeof action === "function" ? action(current[user.id] ?? []) : action,
-      }));
+      saveCustomerTurns(user.id, action);
     };
-    return <Dashboard chatTurns={conversationsByCustomer[user.id] ?? []} onLogout={() => setUser(null)} onTransferRecorded={(transfer) => setTransfersByCustomer((current) => ({ ...current, [transfer.customerId]: [...(current[transfer.customerId] ?? []), transfer] }))} setChatTurns={setCustomerTurns} user={user} />;
+    return <Dashboard chatTurns={conversationsByCustomer[user.id] ?? []} onLogout={() => setUser(null)} onTransferRecorded={recordCustomerTransfer} setChatTurns={setCustomerTurns} user={user} />;
   }
-  if (adminOpen) return <AdminWorkspace onBack={() => setAdminOpen(false)} conversationsByCustomer={conversationsByCustomer} transfersByCustomer={transfersByCustomer} />;
-  return <Login onAdmin={() => setAdminOpen(true)} onLogin={setUser} />;
+  if (adminOpen) return <AdminWorkspace onBack={() => setAdminOpen(false)} registeredAccounts={registeredAccounts} conversationsByCustomer={conversationsByCustomer} transfersByCustomer={transfersByCustomer} />;
+  return <Login onAdmin={() => setAdminOpen(true)} onLogin={setUser} onRegister={registerAccount} registeredAccounts={registeredAccounts} />;
 }

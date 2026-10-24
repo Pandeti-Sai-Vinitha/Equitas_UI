@@ -6216,6 +6216,172 @@ button:focus-visible, input:focus-visible { outline: 3px solid rgba(25, 118, 233
   max-width: 390px;
 }
 
+.auth-mode-switch {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 2px;
+  padding: 3px;
+  margin-bottom: 14px;
+  border: 1px solid #e2e9f2;
+  border-radius: 10px;
+  background: #edf2f8;
+}
+
+.auth-mode-switch button {
+  min-height: 30px;
+  border: 0;
+  border-radius: 7px;
+  color: #66758d;
+  background: transparent;
+  font-size: 10px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.auth-mode-switch button.active {
+  color: #124e9e;
+  background: white;
+  box-shadow: 0 2px 8px rgba(21, 51, 95, .1);
+}
+
+.signup-demo-note {
+  margin: 12px 0 0;
+  color: #77859a;
+  font-size: 10px;
+  line-height: 1.5;
+  text-align: center;
+}
+
+.login-card.is-signup .auth-mode-switch {
+  margin-bottom: 12px;
+}
+
+.login-card.is-signup .login-heading {
+  margin-bottom: 12px;
+}
+
+.login-card.is-signup .login-icon {
+  width: 32px;
+  height: 32px;
+  margin-bottom: 8px;
+  border-radius: 10px;
+}
+
+.login-card.is-signup .login-heading h2 {
+  margin-bottom: 4px;
+  font-size: 22px;
+}
+
+.login-card.is-signup .login-heading p {
+  font-size: 11px;
+}
+
+.login-card.is-signup > label {
+  margin-bottom: 8px;
+}
+
+.login-card.is-signup > label > span {
+  margin-bottom: 4px;
+  font-size: 10px;
+}
+
+.login-card.is-signup .field,
+.login-card.is-signup .primary-button {
+  height: 36px;
+  border-radius: 9px;
+}
+
+.login-card.is-signup .field {
+  gap: 8px;
+  padding: 0 10px;
+}
+
+.login-card.is-signup .field > svg {
+  width: 16px;
+  height: 16px;
+}
+
+.login-card.is-signup .field input {
+  font-size: 12px;
+}
+
+.login-card.is-signup .signup-demo-note {
+  margin-top: 7px;
+  font-size: 9px;
+}
+
+.login-card.is-signup .security-note {
+  margin-top: 8px;
+  font-size: 9px;
+}
+
+.login-card:not(.is-signup) .auth-mode-switch {
+  margin-bottom: 12px;
+}
+
+.login-card:not(.is-signup) .login-heading {
+  margin-bottom: 12px;
+}
+
+.login-card:not(.is-signup) .login-icon {
+  width: 32px;
+  height: 32px;
+  margin-bottom: 8px;
+  border-radius: 10px;
+}
+
+.login-card:not(.is-signup) .login-heading h2 {
+  margin-bottom: 4px;
+  font-size: 22px;
+}
+
+.login-card:not(.is-signup) .login-heading p {
+  font-size: 11px;
+}
+
+.login-card:not(.is-signup) > label {
+  margin-bottom: 8px;
+}
+
+.login-card:not(.is-signup) > label > span {
+  margin-bottom: 4px;
+  font-size: 10px;
+}
+
+.login-card:not(.is-signup) .field,
+.login-card:not(.is-signup) .primary-button {
+  height: 36px;
+  border-radius: 9px;
+}
+
+.login-card:not(.is-signup) .field {
+  gap: 8px;
+  padding: 0 10px;
+}
+
+.login-card:not(.is-signup) .field > svg {
+  width: 16px;
+  height: 16px;
+}
+
+.login-card:not(.is-signup) .field input {
+  font-size: 12px;
+}
+
+.login-card:not(.is-signup) .form-options {
+  margin-bottom: 10px;
+  font-size: 10px;
+}
+
+.login-card:not(.is-signup) .security-note {
+  margin-top: 8px;
+  font-size: 9px;
+}
+
+.login-card:not(.is-signup) .admin-entry-link {
+  margin-top: 8px;
+}
+
 .login-heading {
   margin-bottom: 20px;
 }
