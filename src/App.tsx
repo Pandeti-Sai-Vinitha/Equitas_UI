@@ -124,7 +124,7 @@ const allProducts: Product[] = [
     amount: `₹ ${PERSONAL_LOAN_OUTSTANDING.replace("₹", "").trim()}`,
     number: `${PERSONAL_LOAN_REMAINING_INSTALLMENTS} instalments remaining`,
     icon: "card",
-    tone: "blue",
+    tone: "loan",
   },
   {
     type: "Insurance",
@@ -477,6 +477,8 @@ type ChatTurn = {
   answer: string;
   link: boolean;
   visibleSteps: number;
+  startedAt?: number;
+  completedAt?: number;
   timestamp: string;
   accountBalanceAtQuery?: string;
   rainyBalanceAtQuery?: number;
@@ -486,6 +488,27 @@ type ChatTurn = {
   supportContactSelected?: boolean;
   supportTransferConfirmed?: boolean;
   supportTransferCancelled?: boolean;
+};
+
+type InvestmentAllocation = {
+  fixedDepositAmount: number;
+  rainyDaysAmount: number;
+  minimumSavingsBalance: number;
+};
+
+type InvestmentBalances = {
+  savings: number;
+  fixedDeposits: number;
+  rainyDays: number;
+};
+
+type ChatTransfer = {
+  id: string;
+  customerId: string;
+  from: string;
+  to: string;
+  amount: number;
+  confirmedAt: string;
 };
 
 function parseCurrencyAmount(value: string): number {
@@ -512,6 +535,10 @@ function isPocketQuery(query: string): boolean {
   return isInvestmentQuery(query) || /rainy days|savings pocket|pocket|save money/i.test(query);
 }
 
+function isUnavailableTransactionLookup(query: string): boolean {
+  return /(?:latest|most recent|last)\s+(?:atm\s+)?(?:cash\s+)?withdrawal/i.test(query);
+}
+
 function monthlyContribution(product?: Product): string | undefined {
   return product?.number.match(/₹\s?[\d,]+\smonthly/i)?.[0].replace(/\s+monthly/i, "/month");
 }
@@ -519,6 +546,9 @@ function monthlyContribution(product?: Product): string | undefined {
 function createInvestmentAnswer(query: string, products: Product[], rainyBalance: number, pockets: Pocket[] = []): string {
   if (isTransferRequest(query)) {
     return "I can’t transfer or move money on your behalf. Talk to an Equitas representative for help; no money will move from this chat.";
+  }
+  if (isUnavailableTransactionLookup(query)) {
+    return "I can’t retrieve live transaction details in this chat, so I can’t verify your latest ATM withdrawal. Please check your account’s transaction history or latest statement for the confirmed details.";
   }
   const savingsBalance = parseCurrencyAmount(products.find((product) => product.type === "Savings account")?.amount ?? "₹1,20,430");
   const rainyTopUp = Math.min(MAX_RAINY_TOP_UP, Math.max(0, savingsBalance - 50000), Math.max(0, 50000 - rainyBalance));
@@ -574,8 +604,11 @@ const thinkingSteps = [
   { title: "Prepare the response", detail: "Build a clear answer with useful next steps.", time: "0:09" },
 ];
 
-function ConsentSettings() {
-  const [personalised, setPersonalised] = useState(true);
+function formatThinkingTime(seconds: number) {
+  return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
+}
+
+function ConsentSettings({ personalised, onPersonalisedChange }: { personalised: boolean; onPersonalisedChange: (enabled: boolean) => void }) {
   const [updates, setUpdates] = useState(false);
   const [activeSetting, setActiveSetting] = useState<string | null>(null);
   return (
@@ -583,7 +616,7 @@ function ConsentSettings() {
       <div className="settings-card">
         <div className="settings-card-head">
           <div><strong>Personalised insights</strong><p>Use balances, transactions and upcoming payments to give relevant suggestions.</p></div>
-          <button aria-checked={personalised} aria-label="Personalised insights" className={`consent-toggle ${personalised ? "is-on" : ""}`} onClick={() => setPersonalised(!personalised)} role="switch" type="button"><i /></button>
+          <button aria-checked={personalised} aria-label="Personalised insights" className={`consent-toggle ${personalised ? "is-on" : ""}`} onClick={() => onPersonalisedChange(!personalised)} role="switch" type="button"><i /></button>
         </div>
         <div className="settings-uses">
           <span><i><Icon name="card" /></i>Account balances</span>
@@ -635,8 +668,43 @@ const sampleHistory: ChatTurn[] = [
   { id: -7, title: "Personal loan repayment", query: "What is my personal loan EMI?", answer: `Your personal loan has ${PERSONAL_LOAN_OUTSTANDING} outstanding, with a ${formatRupees(PERSONAL_LOAN_EMI)} monthly EMI due ${PERSONAL_LOAN_NEXT_DUE}.`, link: false, visibleSteps: 5, timestamp: "6 Oct 2026" },
 ];
 
-type AdminMessage = { speaker: "Assistant" | "Customer"; time: string; text: string };
+type AdminRecommendation = {
+  availableSavings: string;
+  holdings: string[];
+  suggestions: string[];
+  reserveNote: string;
+};
+type AdminMessage = { speaker: "Assistant" | "Customer"; time: string; text: string; recommendation?: AdminRecommendation };
 type AdminConversation = { title: string; time: string; messages: AdminMessage[] };
+
+function getAdminInvestmentRecommendation(turn: ChatTurn): AdminRecommendation {
+  const products = turn.productsAtQuery ?? allProducts;
+  const savingsBalance = parseCurrencyAmount(turn.accountBalanceAtQuery ?? products.find((product) => product.type === "Savings account")?.amount ?? "₹1,20,430");
+  const rainyBalance = turn.rainyBalanceAtQuery ?? 25500;
+  const rainyTopUp = Math.min(MAX_RAINY_TOP_UP, Math.max(0, savingsBalance - 50000), Math.max(0, 50000 - rainyBalance));
+  const loan = products.find((product) => product.type === "Personal loan");
+  const fixedDepositAmount = Math.min(40000, Math.max(0, savingsBalance - 50000 - (loan ? PERSONAL_LOAN_EMI : 0) - rainyTopUp));
+  const fixedDeposits = products.find((product) => product.type === "Fixed deposits");
+  const recurringDeposit = products.find((product) => product.type === "Recurring deposit");
+  const mutualFunds = products.find((product) => product.type === "Mutual funds");
+  const rainyGoal = turn.pocketsAtQuery?.find((pocket) => pocket.name === "Rainy Days")?.goal ?? 50000;
+  const holdings = [
+    fixedDeposits && `Fixed deposits · ${fixedDeposits.amount.trim()}`,
+    recurringDeposit && `Recurring deposit · ${recurringDeposit.amount.trim()}${monthlyContribution(recurringDeposit) ? ` · continue ${monthlyContribution(recurringDeposit)}/month` : ""}`,
+    mutualFunds && `Mutual funds · ${mutualFunds.amount.trim()} · review before adding another SIP`,
+    loan && `Personal loan · ${loan.amount.trim()} · ${formatRupees(PERSONAL_LOAN_EMI)} EMI due ${PERSONAL_LOAN_NEXT_DUE}`,
+  ].filter((holding): holding is string => Boolean(holding));
+  const suggestions = [
+    ...(fixedDepositAmount > 0 ? [`Additional fixed deposit · ${formatRupees(fixedDepositAmount)} for 6 months · 7.25% p.a. · estimated interest ${formatRupees(Math.round(fixedDepositAmount * .0725 * .5))}`] : []),
+    ...(rainyTopUp > 0 ? [`Rainy Days · top up ${formatRupees(rainyTopUp)} · projected balance ${formatRupees(rainyBalance + rainyTopUp)} of ${formatRupees(rainyGoal)}`] : []),
+  ];
+  return {
+    availableSavings: formatRupees(savingsBalance),
+    holdings,
+    suggestions,
+    reserveNote: `Keep at least ${formatRupees(50000)} accessible${loan ? ` and reserve ${formatRupees(PERSONAL_LOAN_EMI)} for the upcoming EMI` : ""}. Illustrative suggestions only; nothing moves unless confirmed.`,
+  };
+}
 
 const seedAdminConversations: Record<string, AdminConversation[]> = {
   "123456789": [
@@ -698,8 +766,9 @@ const seedAdminConversations: Record<string, AdminConversation[]> = {
   ],
 };
 
-function AdminWorkspace({ onBack, conversationsByCustomer }: { onBack: () => void; conversationsByCustomer: Record<string, ChatTurn[]> }) {
+function AdminWorkspace({ onBack, conversationsByCustomer, transfersByCustomer }: { onBack: () => void; conversationsByCustomer: Record<string, ChatTurn[]>; transfersByCustomer: Record<string, ChatTransfer[]> }) {
   const [selectedCustomerId, setSelectedCustomerId] = useState<string | null>(null);
+  const [selectedCustomerTab, setSelectedCustomerTab] = useState<"conversations" | "transfers">("conversations");
   const [customerSearch, setCustomerSearch] = useState("");
   const [customerPage, setCustomerPage] = useState(0);
   const customerPageSize = 10;
@@ -710,6 +779,7 @@ function AdminWorkspace({ onBack, conversationsByCustomer }: { onBack: () => voi
       ...customer,
       reference: `C00${index + 1}`,
       liveTurns,
+      transfers: transfersByCustomer[customer.id] ?? [],
       conversations: seeded,
       messageCount: seeded.reduce((total, conversation) => total + conversation.messages.length, 0) + liveTurns.length * 2,
       lastActivity: liveTurns.at(-1)?.timestamp ?? seeded[0]?.time ?? "No activity",
@@ -726,7 +796,7 @@ function AdminWorkspace({ onBack, conversationsByCustomer }: { onBack: () => voi
   const selectedCustomer = customers.find((customer) => customer.id === selectedCustomerId);
   const selectedLiveTranscript: AdminMessage[] = selectedCustomer?.liveTurns.flatMap((turn) => [
     { speaker: "Customer" as const, time: turn.timestamp, text: turn.query },
-    { speaker: "Assistant" as const, time: turn.timestamp, text: turn.answer },
+    { speaker: "Assistant" as const, time: turn.timestamp, text: turn.answer, ...(isInvestmentQuery(turn.query) ? { recommendation: getAdminInvestmentRecommendation(turn) } : {}) },
     ...(turn.supportOptionsOpened ? [{ speaker: "Customer" as const, time: turn.timestamp, text: "Talk to a person" }] : []),
     ...(turn.supportContactSelected ? [{ speaker: "Customer" as const, time: turn.timestamp, text: "Talk to an agent" }] : []),
     ...(turn.supportTransferConfirmed ? [{ speaker: "Assistant" as const, time: turn.timestamp, text: "The customer confirmed the Rainy Days transfer. Account balances were updated." }] : []),
@@ -739,7 +809,7 @@ function AdminWorkspace({ onBack, conversationsByCustomer }: { onBack: () => voi
         <div className="admin-header-actions"><span className="admin-avatar">AD</span><strong>Admin</strong><button onClick={onBack} type="button">Sign out</button></div>
       </header>
       <section className="admin-content" id="admin-customers">
-        <div className="admin-page-heading"><div><span className="eyebrow">Support workspace</span><h1>Customer list</h1><p>Expand a customer to review their assistant conversations.</p></div></div>
+        <div className="admin-page-heading"><div><span className="eyebrow">Support workspace</span><h1>Customer list</h1><p>Expand a customer to review assistant conversations and confirmed chat transfers.</p></div></div>
         <section className="admin-customer-panel">
           <div className="admin-section-heading">
             <div><h2>Customers</h2><p>Search by customer name, ID, email, or reference.</p></div>
@@ -769,7 +839,7 @@ function AdminWorkspace({ onBack, conversationsByCustomer }: { onBack: () => voi
                       <button
                         aria-expanded={isSelected}
                         className="admin-customer-select"
-                        onClick={() => setSelectedCustomerId(isSelected ? null : customer.id)}
+                        onClick={() => { setSelectedCustomerTab("conversations"); setSelectedCustomerId(isSelected ? null : customer.id); }}
                         type="button"
                       >
                         <span className="admin-customer-avatar">{customer.firstName.slice(0, 1)}</span>
@@ -798,38 +868,76 @@ function AdminWorkspace({ onBack, conversationsByCustomer }: { onBack: () => voi
           <section className="admin-customer-panel admin-selected-conversations">
             <div className="admin-section-heading">
               <div>
-                <h2>{selectedCustomer.name} · Conversations</h2>
+                <h2>{selectedCustomer.name} · Activity</h2>
                 <p>{selectedCustomer.reference} · {selectedCustomer.id} · {selectedCustomer.messageCount} messages</p>
               </div>
               <button className="admin-close-conversations" onClick={() => setSelectedCustomerId(null)} type="button">
                 Close <Icon name="close" size={14} />
               </button>
             </div>
+            <div aria-label="Customer activity" className="admin-activity-tabs" role="tablist">
+              <button aria-controls="admin-conversations-panel" aria-selected={selectedCustomerTab === "conversations"} className={selectedCustomerTab === "conversations" ? "active" : ""} id="admin-conversations-tab" onClick={() => setSelectedCustomerTab("conversations")} role="tab" type="button">
+                Conversations <span>{selectedCustomer.liveTurns.length + selectedCustomer.conversations.length}</span>
+              </button>
+              <button aria-controls="admin-transfers-panel" aria-selected={selectedCustomerTab === "transfers"} className={selectedCustomerTab === "transfers" ? "active" : ""} id="admin-transfers-tab" onClick={() => setSelectedCustomerTab("transfers")} role="tab" type="button">
+                Transfers <span>{selectedCustomer.transfers.length}</span>
+              </button>
+            </div>
             <div className="admin-selected-conversation-list">
-              {selectedCustomer.liveTurns.length > 0 && (
-                <article className="admin-conversation-block">
-                  <div className="admin-conversation-meta"><strong>Current session</strong><time>{selectedCustomer.lastActivity}</time></div>
-                  {selectedLiveTranscript.map((message, index) => (
-                    <div className="admin-transcript-message" key={`live-${message.time}-${index}`}>
-                      <div><strong>{message.speaker}</strong><time>{message.time}</time></div>
-                      <p>{message.text}</p>
-                    </div>
+              {selectedCustomerTab === "conversations" ? (
+                <div aria-labelledby="admin-conversations-tab" id="admin-conversations-panel" role="tabpanel">
+                  {selectedCustomer.liveTurns.length > 0 && (
+                    <article className="admin-conversation-block">
+                      <div className="admin-conversation-meta"><strong>Current session</strong><time>{selectedCustomer.lastActivity}</time></div>
+                      {selectedLiveTranscript.map((message, index) => (
+                        <div className="admin-transcript-message" key={`live-${message.time}-${index}`}>
+                          <div><strong>{message.speaker}</strong><time>{message.time}</time></div>
+                          <p>{message.text}</p>
+                          {message.recommendation && (
+                            <section aria-label="Assistant recommendations" className="admin-recommendations">
+                              <strong>Recommendations and account context</strong>
+                              <p><b>Available savings:</b> {message.recommendation.availableSavings}. {message.recommendation.reserveNote}</p>
+                              {message.recommendation.holdings.length > 0 && (
+                                <div><b>Current products</b><ul>{message.recommendation.holdings.map((holding) => <li key={holding}>{holding}</li>)}</ul></div>
+                              )}
+                              {message.recommendation.suggestions.length > 0 && (
+                                <div><b>Suggested options</b><ul>{message.recommendation.suggestions.map((suggestion) => <li key={suggestion}>{suggestion}</li>)}</ul></div>
+                              )}
+                              {message.recommendation.suggestions.length === 0 && <p>No additional allocation was suggested for this query.</p>}
+                            </section>
+                          )}
+                        </div>
+                      ))}
+                    </article>
+                  )}
+                  {selectedCustomer.conversations.map((conversation) => (
+                    <article className="admin-conversation-block" key={conversation.title}>
+                      <div className="admin-conversation-meta"><strong>{conversation.title}</strong><time>{conversation.time}</time></div>
+                      {conversation.messages.map((message, index) => (
+                        <div className="admin-transcript-message" key={`${message.time}-${index}`}>
+                          <div><strong>{message.speaker}</strong><time>{message.time}</time></div>
+                          <p>{message.text}</p>
+                        </div>
+                      ))}
+                    </article>
                   ))}
-                </article>
-              )}
-              {selectedCustomer.conversations.map((conversation) => (
-                <article className="admin-conversation-block" key={conversation.title}>
-                  <div className="admin-conversation-meta"><strong>{conversation.title}</strong><time>{conversation.time}</time></div>
-                  {conversation.messages.map((message, index) => (
-                    <div className="admin-transcript-message" key={`${message.time}-${index}`}>
-                      <div><strong>{message.speaker}</strong><time>{message.time}</time></div>
-                      <p>{message.text}</p>
-                    </div>
-                  ))}
-                </article>
-              ))}
-              {!selectedCustomer.conversations.length && !selectedCustomer.liveTurns.length && (
-                <p className="admin-no-conversations">No conversations for this customer yet.</p>
+                  {!selectedCustomer.conversations.length && !selectedCustomer.liveTurns.length && (
+                    <p className="admin-no-conversations">No conversations for this customer yet.</p>
+                  )}
+                </div>
+              ) : (
+                <div aria-labelledby="admin-transfers-tab" id="admin-transfers-panel" role="tabpanel">
+                  <article className="admin-conversation-block admin-transfer-block">
+                    <div className="admin-conversation-meta"><strong>Confirmed chat transfers</strong><span>{selectedCustomer.transfers.length} recorded</span></div>
+                    {selectedCustomer.transfers.length > 0 ? selectedCustomer.transfers.slice().reverse().map((transfer) => (
+                      <div className="admin-transfer-row" key={transfer.id}>
+                        <span className="admin-transfer-icon"><Icon name="repeat" size={16} /></span>
+                        <span className="admin-transfer-details"><strong>{transfer.from} <Icon name="arrow" size={13} /> {transfer.to}</strong><small>{new Intl.DateTimeFormat("en-IN", { dateStyle: "medium", timeStyle: "short" }).format(new Date(transfer.confirmedAt))}</small></span>
+                        <span className="admin-transfer-amount"><strong>{formatRupees(transfer.amount)}</strong><small>Confirmed</small></span>
+                      </div>
+                    )) : <p className="admin-no-conversations">No confirmed transfers from chats yet.</p>}
+                  </article>
+                </div>
               )}
             </div>
           </section>
@@ -840,9 +948,20 @@ function AdminWorkspace({ onBack, conversationsByCustomer }: { onBack: () => voi
   );
 }
 
-function ChatHistory({ accountBalance, accountNumber, onExpand, pockets, products, rainyBalance, selected, setSelected, showAll = false, turns }: { accountBalance: string; accountNumber: string; onExpand?: () => void; pockets: Pocket[]; products: Product[]; rainyBalance: number; selected: ChatTurn | null; setSelected: (turn: ChatTurn | null) => void; showAll?: boolean; turns: ChatTurn[] }) {
+function ChatHistory({ accountBalance, accountNumber, onExpand, onOpenConsent, personalised, pockets, products, rainyBalance, selected, setSelected, showAll = false, turns }: { accountBalance: string; accountNumber: string; onExpand?: () => void; onOpenConsent: () => void; personalised: boolean; pockets: Pocket[]; products: Product[]; rainyBalance: number; selected: ChatTurn | null; setSelected: (turn: ChatTurn | null) => void; showAll?: boolean; turns: ChatTurn[] }) {
   const allConversations = [...turns].reverse().concat(sampleHistory);
   const conversations = showAll ? allConversations : allConversations.slice(0, 6);
+
+  if (!personalised) {
+    return (
+      <div className="chat-history-consent">
+        <span><Icon name="shield" size={20} /></span>
+        <strong>Chat history is hidden</strong>
+        <p>Enable Personalised insights in your consent settings to view account-based AI conversations and suggestions.</p>
+        <button onClick={onOpenConsent} type="button">Review consent settings <Icon name="arrow" size={14} /></button>
+      </div>
+    );
+  }
 
   if (selected) {
     return (
@@ -1071,7 +1190,7 @@ function ProfileFlow({ onPocketCreated, pockets, product, rainyBalance, screen, 
   );
 }
 
-function DetailView({ onExpandHistory, onPocketCreated, pockets, title, onBack, products, rainyBalance, turns, user }: { onExpandHistory: () => void; onPocketCreated: (name: string, goal: number) => void; pockets: Pocket[]; title: string; onBack: () => void; products: Product[]; rainyBalance: number; turns: ChatTurn[]; user: MockUser }) {
+function DetailView({ onExpandHistory, onOpenConsent, onPocketCreated, onPersonalisedChange, personalised, pockets, title, onBack, products, rainyBalance, turns, user }: { onExpandHistory: () => void; onOpenConsent: () => void; onPocketCreated: (name: string, goal: number) => void; onPersonalisedChange: (enabled: boolean) => void; personalised: boolean; pockets: Pocket[]; title: string; onBack: () => void; products: Product[]; rainyBalance: number; turns: ChatTurn[]; user: MockUser }) {
   const [flowScreen, setFlowScreen] = useState<string | null>(null);
   const [selectedConversation, setSelectedConversation] = useState<ChatTurn | null>(null);
   const product = products.find((item) => item.type === title);
@@ -1111,7 +1230,7 @@ function DetailView({ onExpandHistory, onPocketCreated, pockets, title, onBack, 
         </div>
         <button aria-label="Back" className="profile-back-button" onClick={navigateBack} type="button"><Icon name="back" size={16} /> Back</button>
       </div>
-      {title === "Security settings" ? <SecuritySettings /> : title === "Consent" ? <ConsentSettings /> : title === "Chat history" ? <ChatHistory accountBalance={products[0]?.amount ?? "₹1,20,430"} accountNumber={products[0]?.number ?? "4821 •••• •••• 1234"} onExpand={onExpandHistory} pockets={pockets} products={products} rainyBalance={rainyBalance} selected={selectedConversation} setSelected={setSelectedConversation} turns={turns} /> : <ProfileFlow onPocketCreated={onPocketCreated} pockets={pockets} product={product} rainyBalance={rainyBalance} screen={flowScreen} setScreen={setFlowScreen} title={title} user={user} />}
+      {title === "Security settings" ? <SecuritySettings /> : title === "Consent" ? <ConsentSettings onPersonalisedChange={onPersonalisedChange} personalised={personalised} /> : title === "Chat history" ? <ChatHistory accountBalance={products[0]?.amount ?? "₹1,20,430"} accountNumber={products[0]?.number ?? "4821 •••• •••• 1234"} onExpand={onExpandHistory} onOpenConsent={onOpenConsent} personalised={personalised} pockets={pockets} products={products} rainyBalance={rainyBalance} selected={selectedConversation} setSelected={setSelectedConversation} turns={turns} /> : <ProfileFlow onPocketCreated={onPocketCreated} pockets={pockets} product={product} rainyBalance={rainyBalance} screen={flowScreen} setScreen={setFlowScreen} title={title} user={user} />}
     </div>
   );
 }
@@ -1125,8 +1244,10 @@ function ProfileDrawer({
   initialDetail,
   onExpandHistory,
   onPocketCreated,
+  onPersonalisedChange,
   products,
   pockets,
+  personalised,
   rainyBalance,
   turns,
   user,
@@ -1139,8 +1260,10 @@ function ProfileDrawer({
   initialDetail?: string | null;
   onExpandHistory: () => void;
   onPocketCreated: (name: string, goal: number) => void;
+  onPersonalisedChange: (enabled: boolean) => void;
   products: Product[];
   pockets: Pocket[];
+  personalised: boolean;
   rainyBalance: number;
   turns: ChatTurn[];
   user: MockUser;
@@ -1174,7 +1297,7 @@ function ProfileDrawer({
           <button aria-label="Close profile" className="icon-button" onClick={close} type="button"><Icon name="close" /></button>
         </div>
         {detail ? (
-          <DetailView onBack={() => setDetail(null)} onExpandHistory={onExpandHistory} onPocketCreated={onPocketCreated} pockets={pockets} products={products} rainyBalance={rainyBalance} title={detail} turns={turns} user={user} />
+          <DetailView onBack={() => setDetail(null)} onExpandHistory={onExpandHistory} onOpenConsent={() => setDetail("Consent")} onPersonalisedChange={onPersonalisedChange} onPocketCreated={onPocketCreated} personalised={personalised} pockets={pockets} products={products} rainyBalance={rainyBalance} title={detail} turns={turns} user={user} />
         ) : (
           <div className="drawer-scroll" ref={drawerScrollRef}>
             <section className="profile-summary">
@@ -1213,6 +1336,7 @@ const suggestedMessages: { query: string; icon: IconName }[] = [
   { query: "Where can I invest my savings?", icon: "fund" },
   { query: "How much is in my Rainy Days pocket?", icon: "deposit" },
   { query: "I want to transfer money to Rainy Days", icon: "repeat" },
+  { query: "What was my latest ATM withdrawal?", icon: "card" },
 ];
 
 function TraceFlow({ complete, progress }: { complete: boolean; progress: number }) {
@@ -1249,7 +1373,7 @@ function TraceFlow({ complete, progress }: { complete: boolean; progress: number
   );
 }
 
-function ChatTurnView({ accountBalance = "₹1,20,430", accountNumber = "4821 •••• •••• 1234", hideQuery = false, onRainyTransfer, onSupportUpdate, pockets = [], products = [], rainyBalance = 25500, turn }: { accountBalance?: string; accountNumber?: string; hideQuery?: boolean; onRainyTransfer?: (amount: number) => void; onSupportUpdate?: (turnId: number, field: "supportOptionsOpened" | "supportContactSelected" | "supportTransferConfirmed" | "supportTransferCancelled") => void; pockets?: Pocket[]; products?: Product[]; rainyBalance?: number; turn: ChatTurn }) {
+function ChatTurnView({ accountBalance = "₹1,20,430", accountNumber = "4821 •••• •••• 1234", hideQuery = false, onConfirmAllocations, onRainyTransfer, onSupportUpdate, pockets = [], products = [], rainyBalance = 25500, turn }: { accountBalance?: string; accountNumber?: string; hideQuery?: boolean; onConfirmAllocations?: (allocation: InvestmentAllocation) => InvestmentBalances | null; onRainyTransfer?: (amount: number) => void; onSupportUpdate?: (turnId: number, field: "supportOptionsOpened" | "supportContactSelected" | "supportTransferConfirmed" | "supportTransferCancelled") => void; pockets?: Pocket[]; products?: Product[]; rainyBalance?: number; turn: ChatTurn }) {
   const complete = turn.visibleSteps >= thinkingSteps.length;
   const transferRequest = isTransferRequest(turn.query);
   const showInvestmentGuidance = !transferRequest && isInvestmentQuery(turn.query);
@@ -1258,7 +1382,8 @@ function ChatTurnView({ accountBalance = "₹1,20,430", accountNumber = "4821 �
   const turnPockets = turn.pocketsAtQuery ?? pockets;
   const matchingPockets = turnPockets.filter((pocket) => turn.query.toLowerCase().includes(pocket.name.toLowerCase()));
   const visiblePockets = matchingPockets.length ? matchingPockets : turnPockets;
-  const [analysisExpanded, setAnalysisExpanded] = useState(true);
+  const [analysisExpanded, setAnalysisExpanded] = useState(false);
+  const [elapsedSeconds, setElapsedSeconds] = useState(() => turn.startedAt ? Math.floor((Date.now() - turn.startedAt) / 1000) : 0);
   const [pocketView, setPocketView] = useState<"summary" | "details" | "transfer" | "success">("summary");
   const [transferCompleted, setTransferCompleted] = useState(false);
   const [supportDetailsOpen, setSupportDetailsOpen] = useState(false);
@@ -1267,6 +1392,20 @@ function ChatTurnView({ accountBalance = "₹1,20,430", accountNumber = "4821 �
   const [otpValue, setOtpValue] = useState("");
   const [otpAttempts, setOtpAttempts] = useState(0);
   const [otpError, setOtpError] = useState("");
+  const [selectedAllocation, setSelectedAllocation] = useState({ fixedDeposit: false, rainyDays: false });
+  const [allocationStep, setAllocationStep] = useState<"select" | "review" | "confirm" | "success">("select");
+  const [allocationOtp, setAllocationOtp] = useState("");
+  const [allocationAttempts, setAllocationAttempts] = useState(0);
+  const [allocationError, setAllocationError] = useState("");
+  const [confirmedBalances, setConfirmedBalances] = useState<InvestmentBalances | null>(null);
+  useEffect(() => {
+    const startedAt = turn.startedAt;
+    if (complete || startedAt === undefined) return;
+    const updateElapsed = () => setElapsedSeconds(Math.floor((Date.now() - startedAt) / 1000));
+    updateElapsed();
+    const timer = window.setInterval(updateElapsed, 1000);
+    return () => window.clearInterval(timer);
+  }, [complete, turn.startedAt]);
   const turnAccountBalance = turn.accountBalanceAtQuery ?? accountBalance;
   const turnRainyBalance = turn.rainyBalanceAtQuery ?? rainyBalance;
   const turnProducts = turn.productsAtQuery ?? products;
@@ -1276,6 +1415,10 @@ function ChatTurnView({ accountBalance = "₹1,20,430", accountNumber = "4821 �
   const personalLoan = turnProducts.find((product) => product.type === "Personal loan");
   const loanReserve = personalLoan ? PERSONAL_LOAN_EMI : 0;
   const fixedDepositAmount = Math.min(40000, Math.max(0, availableSavings - 50000 - loanReserve - suggestedTransferAmount));
+  const selectedFixedDepositAmount = selectedAllocation.fixedDeposit ? fixedDepositAmount : 0;
+  const selectedRainyDaysAmount = selectedAllocation.rainyDays ? suggestedTransferAmount : 0;
+  const selectedAllocationTotal = selectedFixedDepositAmount + selectedRainyDaysAmount;
+  const remainingSavingsAfterAllocation = availableSavings - selectedAllocationTotal;
   const fixedDepositInterest = Math.round(fixedDepositAmount * .0725 * .5);
   const fixedDepositMaturity = fixedDepositAmount + fixedDepositInterest;
   const currentFixedDeposits = turnProducts.find((product) => product.type === "Fixed deposits");
@@ -1284,11 +1427,14 @@ function ChatTurnView({ accountBalance = "₹1,20,430", accountNumber = "4821 �
   const currentPersonalLoan = personalLoan;
   const accountSuffix = accountNumber.match(/^\d{4}/)?.[0] ?? "4821";
 
-  const renderPocketCard = (pocket: Pocket) => (
-    <div className="rainy-pocket" key={pocket.name}>
-      <div className="rainy-pocket-head"><span><Icon name="deposit" size={18} /></span><div><small>Current savings pocket balance</small><strong>{pocket.name}</strong><p>{pocket.goal > 0 ? `${Math.min(100, Math.round((pocket.balance / pocket.goal) * 100))}% of ${formatRupees(pocket.goal)} goal` : "Flexible savings pocket"}</p></div><b>{formatRupees(pocket.name === "Rainy Days" ? turnRainyBalance : pocket.balance)}</b></div>
-      {pocket.name === "Rainy Days" && suggestedTransferAmount > 0 && <p className="rainy-pocket-impact">Adding {formatRupees(suggestedTransferAmount)} would bring Rainy Days to {formatRupees(turnRainyBalance + suggestedTransferAmount)} — {Math.min(100, Math.round(((turnRainyBalance + suggestedTransferAmount) / pocket.goal) * 100))}% of your {formatRupees(pocket.goal)} goal.</p>}
-      {pocket.name === "Rainy Days" && <div className="rainy-pocket-actions"><button onClick={() => setPocketView("details")} type="button">View details</button><button disabled={suggestedTransferAmount === 0 || transferCompleted} onClick={() => setPocketView("transfer")} type="button">{transferCompleted ? "Transfer complete" : suggestedTransferAmount === 0 ? "No top-up suggested" : `Transfer ${formatRupees(suggestedTransferAmount)}`} {!transferCompleted && <Icon name="arrow" size={14} />}</button></div>}
+  const renderPocketCard = (pocket: Pocket, showTransferAction = true, onCardSelect?: () => void) => (
+    <div className={`rainy-pocket ${onCardSelect && selectedAllocation.rainyDays ? "is-selected" : ""}`} key={pocket.name} onClick={onCardSelect} onKeyDown={onCardSelect ? (event) => { if (event.target === event.currentTarget && (event.key === "Enter" || event.key === " ")) { event.preventDefault(); onCardSelect(); } } : undefined} role={onCardSelect ? "checkbox" : undefined} aria-checked={onCardSelect ? selectedAllocation.rainyDays : undefined} tabIndex={onCardSelect ? 0 : undefined}>
+      <div className="rainy-pocket-head"><span className={onCardSelect ? "suggestion-selection-state" : ""}>{onCardSelect ? selectedAllocation.rainyDays ? <><Icon name="check" size={12} /> Selected</> : "Tap to select" : <Icon name="deposit" size={18} />}</span><div><small>Current savings pocket balance</small><strong>{pocket.name}</strong><p>{pocket.goal > 0 ? `${Math.min(100, Math.round(((pocket.name === "Rainy Days" ? confirmedBalances?.rainyDays ?? turnRainyBalance : pocket.balance) / pocket.goal) * 100))}% of ${formatRupees(pocket.goal)} goal` : "Flexible savings pocket"}</p></div><b>{formatRupees(pocket.name === "Rainy Days" ? confirmedBalances?.rainyDays ?? turnRainyBalance : pocket.balance)}</b></div>
+      {pocket.name === "Rainy Days" && suggestedTransferAmount > 0 && allocationStep !== "success" && <p className="rainy-pocket-impact">Adding {formatRupees(suggestedTransferAmount)} would bring Rainy Days to {formatRupees(turnRainyBalance + suggestedTransferAmount)} — {Math.min(100, Math.round(((turnRainyBalance + suggestedTransferAmount) / pocket.goal) * 100))}% of your {formatRupees(pocket.goal)} goal.</p>}
+      {pocket.name === "Rainy Days" && <div className="rainy-pocket-actions">
+        <button onClick={(event) => { event.stopPropagation(); setPocketView("details"); }} type="button">View details</button>
+        {showTransferAction && <button disabled={suggestedTransferAmount === 0 || transferCompleted} onClick={(event) => { event.stopPropagation(); setPocketView("transfer"); }} type="button">{transferCompleted ? "Transfer complete" : suggestedTransferAmount === 0 ? "No top-up suggested" : `Transfer ${formatRupees(suggestedTransferAmount)}`} {!transferCompleted && <Icon name="arrow" size={14} />}</button>}
+      </div>}
     </div>
   );
 
@@ -1318,14 +1464,39 @@ function ChatTurnView({ accountBalance = "₹1,20,430", accountNumber = "4821 �
     setSupportTransferStatus("cancelled");
     onSupportUpdate?.(turn.id, "supportTransferCancelled");
   }
+
+  function confirmSelectedAllocations() {
+    if (allocationAttempts >= 3) return;
+    if (allocationOtp !== "123456") {
+      const nextAttempts = allocationAttempts + 1;
+      setAllocationAttempts(nextAttempts);
+      setAllocationError(nextAttempts >= 3 ? "Too many incorrect attempts. Edit the selections to restart confirmation." : `That code doesn’t match. ${3 - nextAttempts} attempt${nextAttempts === 2 ? "" : "s"} left.`);
+      return;
+    }
+    const savingsAfterConfirmation = onConfirmAllocations?.({
+      fixedDepositAmount: selectedFixedDepositAmount,
+      rainyDaysAmount: selectedRainyDaysAmount,
+      minimumSavingsBalance: 50000 + loanReserve,
+    });
+    if (!savingsAfterConfirmation) {
+      setAllocationError("Your available balance has changed. Please review the latest recommendation before confirming.");
+      setAllocationStep("review");
+      return;
+    }
+    setConfirmedBalances(savingsAfterConfirmation);
+    setAllocationError("");
+    setAllocationStep("success");
+  }
   return (
     <article className="conversation-turn">
       {!hideQuery && <div className="workspace-user-message"><span>{turn.query}</span><small>{turn.timestamp}</small></div>}
       <div className={`thinking-card ${analysisExpanded ? "" : "is-analysis-collapsed"}`}>
         <div className="trace-tabs">
-          <strong>{complete ? "Analysis complete" : `Step ${Math.min(turn.visibleSteps + 1, thinkingSteps.length)} of ${thinkingSteps.length}`}</strong>
+          <strong aria-live="polite" className={`thinking-status ${complete ? "is-complete" : "is-thinking"}`}>
+            <i />{complete ? "Response ready" : "Thinking"} <time>{formatThinkingTime(complete ? turn.startedAt && turn.completedAt ? Math.floor((turn.completedAt - turn.startedAt) / 1000) : 9 : elapsedSeconds)}</time>
+          </strong>
           <button aria-expanded={analysisExpanded} aria-label={analysisExpanded ? "Hide thinking steps and secure flow" : "Show thinking steps and secure flow"} className="trace-toggle" onClick={() => setAnalysisExpanded((expanded) => !expanded)} type="button">
-            <span>Thinking steps and secure flow</span><Icon name="chevron" size={16} />
+            <span>{analysisExpanded ? "Hide thinking details" : "View thinking details"}</span><Icon name="chevron" size={16} />
           </button>
         </div>
         {analysisExpanded && <div className="analysis-combined">
@@ -1346,7 +1517,7 @@ function ChatTurnView({ accountBalance = "₹1,20,430", accountNumber = "4821 �
         </div>}
         {complete && (
           <div className={`workspace-answer ${showInvestmentGuidance ? "investment-guidance-answer" : ""}`}>
-            <p>{turn.answer.replace("CLICK HERE", "")}</p>
+            {!showInvestmentGuidance && <p>{turn.answer.replace("CLICK HERE", "")}</p>}
             {transferRequest && <div className="rainy-pocket transfer-request-pocket">
               <div className="rainy-pocket-head"><span><Icon name="deposit" size={18} /></span><div><small>Current savings pocket balance</small><strong>Rainy Days</strong></div><b>{formatRupees(turnRainyBalance)}</b></div>
               <label className="transfer-request-amount">
@@ -1389,34 +1560,124 @@ function ChatTurnView({ accountBalance = "₹1,20,430", accountNumber = "4821 �
             </div>}
             {showInvestmentGuidance && <div className="investment-guidance-columns">
               <div className="investment-guidance-column">
+                <section className="investment-group current-finances-group">
+                  <div className="investment-group-heading">
+                    <span className="investment-group-icon"><Icon name="bank" size={15} /></span>
+                    <div><strong>Your current finances</strong><small>Savings, investments, and upcoming commitments</small></div>
+                  </div>
                 <div className="investment-context">
                   <span><small>Available in savings</small><strong>{formatRupees(availableSavings)}</strong></span>
                   <p>Keep at least ₹50,000 accessible{personalLoan ? ` and reserve ${formatRupees(loanReserve)} for your upcoming EMI` : ""}. Recommendations reflect your current account and existing investments.</p>
                 </div>
-                {(currentFixedDeposits || currentRecurringDeposit || currentMutualFunds || currentPersonalLoan) && <div className="existing-investments">
-                  <div className="existing-investments-heading"><strong>Your current investments</strong><small>Suggestions build on what you already hold</small></div>
+                {(currentFixedDeposits || currentRecurringDeposit || currentMutualFunds) && <div className="existing-investments">
+                  <div className="existing-investments-heading"><strong>Your current investments</strong><small>Products you already hold</small></div>
                   <div className="existing-investment-list">
                     {currentFixedDeposits && <div><span className="product-icon product-icon-gold"><Icon name="deposit" size={16} /></span><span><strong>Fixed deposits</strong><small>Current holding</small></span><b>{currentFixedDeposits.amount.trim()}</b></div>}
                     {currentRecurringDeposit && <div><span className="product-icon product-icon-coral"><Icon name="repeat" size={16} /></span><span><strong>Recurring deposit</strong><small>{monthlyContribution(currentRecurringDeposit) ? `Continue ${monthlyContribution(currentRecurringDeposit)} instalments` : "Current holding"}</small></span><b>{currentRecurringDeposit.amount.trim()}</b></div>}
                     {currentMutualFunds && <div><span className="product-icon product-icon-violet"><Icon name="fund" size={16} /></span><span><strong>Mutual funds</strong><small>Review before adding another SIP</small></span><b>{currentMutualFunds.amount.trim()}</b></div>}
-                    {currentPersonalLoan && <div><span className="product-icon product-icon-blue"><Icon name="card" size={16} /></span><span><strong>Personal loan</strong><small>{formatRupees(PERSONAL_LOAN_EMI)} EMI · due {PERSONAL_LOAN_NEXT_DUE}</small></span><b>{currentPersonalLoan.amount.trim()}</b></div>}
                   </div>
                 </div>}
+                {currentPersonalLoan && <div className="investment-loan-commitment">
+                  <div className="investment-loan-heading"><span><Icon name="card" size={15} /></span><div><strong>Loan commitment</strong><small>Keep the upcoming payment accessible</small></div></div>
+                  <div className="investment-loan-details">
+                    <span><small>Outstanding balance</small><strong>{currentPersonalLoan.amount.trim()}</strong></span>
+                    <span><small>Next EMI · due {PERSONAL_LOAN_NEXT_DUE}</small><strong>{formatRupees(PERSONAL_LOAN_EMI)}</strong></span>
+                  </div>
+                </div>}
+                </section>
               </div>
               <div className="investment-guidance-column">
-                <div className="recommendation-card">
-                  <div className="recommendation-head"><span><Icon name="deposit" size={18} /></span><div><small>Suggested allocation</small><strong>{fixedDepositAmount ? "Additional Fixed Deposit" : "Keep your buffer liquid"}</strong></div><b>{formatRupees(fixedDepositAmount)}</b></div>
-                  {fixedDepositAmount > 0 && <div className="recommendation-facts"><span><small>Tenure</small><strong>6 months</strong></span><span><small>Interest rate</small><strong>7.25% p.a.</strong></span><span><small>Est. interest</small><strong>~{formatRupees(fixedDepositInterest)}</strong></span><span><small>Est. maturity</small><strong>~{formatRupees(fixedDepositMaturity)}</strong></span></div>}
+                <section className="investment-group ai-suggestions-group">
+                  <div className="investment-group-heading">
+                    <span className="investment-group-icon"><Icon name="fund" size={15} /></span>
+                    <div><strong>AI suggestions for your money</strong><small>Personalized options based on your savings and commitments. Select one or both to review.</small></div>
+                  </div>
+                {onConfirmAllocations && allocationStep !== "success" && fixedDepositAmount > 0 ? (
+                  <div aria-checked={selectedAllocation.fixedDeposit} className={`recommendation-card selectable-suggestion-card ${selectedAllocation.fixedDeposit ? "is-selected" : ""}`} onClick={() => { setSelectedAllocation((current) => ({ ...current, fixedDeposit: !current.fixedDeposit })); setAllocationStep("select"); }} onKeyDown={(event) => { if (event.key === "Enter" || event.key === " ") { event.preventDefault(); setSelectedAllocation((current) => ({ ...current, fixedDeposit: !current.fixedDeposit })); setAllocationStep("select"); } }} role="checkbox" tabIndex={0}>
+                  <div className="recommendation-head"><span className="suggestion-selection-state">{selectedAllocation.fixedDeposit ? <><Icon name="check" size={12} /> Selected</> : "Tap to select"}</span><div><small>Suggested allocation</small><strong>{fixedDepositAmount ? "Additional Fixed Deposit" : "Keep your buffer liquid"}</strong></div><b>{formatRupees(fixedDepositAmount)}</b></div>
+                  <div className="recommendation-facts"><span><small>Tenure</small><strong>6 months</strong></span><span><small>Interest rate</small><strong>7.25% p.a.</strong></span><span><small>Est. interest</small><strong>~{formatRupees(fixedDepositInterest)}</strong></span><span><small>Est. maturity</small><strong>~{formatRupees(fixedDepositMaturity)}</strong></span></div>
                   <p><Icon name="chart" size={14} /> Indicative estimate only; actual rates and returns depend on the selected deposit terms.</p>
-                </div>
-                {visiblePockets.filter((pocket) => pocket.name === "Rainy Days").map(renderPocketCard)}
+                  </div>
+                ) : (
+                  <div className="recommendation-card">
+                    <div className="recommendation-head"><span><Icon name="deposit" size={18} /></span><div><small>Suggested allocation</small><strong>{fixedDepositAmount ? "Additional Fixed Deposit" : "Keep your buffer liquid"}</strong></div><b>{formatRupees(fixedDepositAmount)}</b></div>
+                    {fixedDepositAmount > 0 && <div className="recommendation-facts"><span><small>Tenure</small><strong>6 months</strong></span><span><small>Interest rate</small><strong>7.25% p.a.</strong></span><span><small>Est. interest</small><strong>~{formatRupees(fixedDepositInterest)}</strong></span><span><small>Est. maturity</small><strong>~{formatRupees(fixedDepositMaturity)}</strong></span></div>}
+                    <p><Icon name="chart" size={14} /> Indicative estimate only; actual rates and returns depend on the selected deposit terms.</p>
+                  </div>
+                )}
+                {visiblePockets.filter((pocket) => pocket.name === "Rainy Days").map((pocket) => onConfirmAllocations && allocationStep !== "success" && suggestedTransferAmount > 0
+                  ? renderPocketCard(pocket, false, () => { setSelectedAllocation((current) => ({ ...current, rainyDays: !current.rainyDays })); setAllocationStep("select"); })
+                  : renderPocketCard(pocket, !onConfirmAllocations))}
+                </section>
               </div>
             </div>}
+            {showInvestmentGuidance && <details className="investment-explanation">
+              <summary><span>Why these suggestions?</span><Icon name="chevron" size={16} /></summary>
+              <p>{turn.answer.replace("CLICK HERE", "")}</p>
+            </details>}
+            {showInvestmentGuidance && onConfirmAllocations && (allocationStep === "success" ? (
+              <div className="allocation-review is-complete" role="status">
+                <strong><Icon name="check" size={16} /> Selected suggestions confirmed</strong>
+                <ul>
+                  {selectedFixedDepositAmount > 0 && <li>{formatRupees(selectedFixedDepositAmount)} added to a new 6-month Fixed Deposit. New total: {formatRupees(confirmedBalances?.fixedDeposits ?? 0)}.</li>}
+                  {selectedRainyDaysAmount > 0 && <li>{formatRupees(selectedRainyDaysAmount)} added to Rainy Days. New balance: {formatRupees(confirmedBalances?.rainyDays ?? 0)}.</li>}
+                </ul>
+                <p>Only the options you selected were applied. Your savings balance is now {formatRupees(confirmedBalances?.savings ?? remainingSavingsAfterAllocation)}.</p>
+              </div>
+            ) : allocationStep === "select" ? (
+              <div className="allocation-actions">
+                <div className="allocation-selection-summary">
+                  {selectedAllocationTotal > 0 ? (
+                    <>
+                      <strong>{Number(selectedAllocation.fixedDeposit) + Number(selectedAllocation.rainyDays)} option{Number(selectedAllocation.fixedDeposit) + Number(selectedAllocation.rainyDays) === 1 ? "" : "s"} selected · {formatRupees(selectedAllocationTotal)}</strong>
+                      <small>Review selection before anything moves.</small>
+                    </>
+                  ) : (
+                    <>
+                      <strong>No suggestions selected</strong>
+                      <small>Select a suggestion card above to review it.</small>
+                    </>
+                  )}
+                </div>
+                <button disabled={selectedAllocationTotal <= 0} onClick={() => { setAllocationError(""); setAllocationStep("review"); }} type="button">Review selection <Icon name="arrow" size={15} /></button>
+              </div>
+            ) : allocationStep === "review" ? (
+              <div className="allocation-review">
+                <div className="allocation-review-heading"><span className="eyebrow">Review your choices</span><strong>Only these selected options will be applied</strong></div>
+                <ul>
+                  {selectedFixedDepositAmount > 0 && <li><span>New 6-month Fixed Deposit</span><b>{formatRupees(selectedFixedDepositAmount)}</b></li>}
+                  {selectedRainyDaysAmount > 0 && <li><span>Rainy Days pocket top-up</span><b>{formatRupees(selectedRainyDaysAmount)}</b></li>}
+                </ul>
+                <div className="allocation-review-total"><span>Total from savings</span><strong>{formatRupees(selectedAllocationTotal)}</strong></div>
+                <p>Estimated savings balance after confirmation: {formatRupees(remainingSavingsAfterAllocation)}. Your ₹50,000 buffer{loanReserve > 0 ? ` and ${formatRupees(loanReserve)} EMI reserve` : ""} will remain accessible.</p>
+                {allocationError && <p className="allocation-error" role="alert">{allocationError}</p>}
+                <div className="allocation-review-actions">
+                  <button onClick={() => { setAllocationAttempts(0); setAllocationOtp(""); setAllocationError(""); setAllocationStep("select"); }} type="button">Edit selection</button>
+                  <button onClick={() => { setAllocationError(""); setAllocationStep("confirm"); }} type="button">Continue to confirmation <Icon name="arrow" size={15} /></button>
+                </div>
+              </div>
+            ) : (
+              <div className="allocation-review allocation-confirmation">
+                <div className="allocation-review-heading"><span className="eyebrow">Secure confirmation</span><strong>Confirm only the selected transfers</strong></div>
+                <ul>
+                  {selectedFixedDepositAmount > 0 && <li><span>New 6-month Fixed Deposit</span><b>{formatRupees(selectedFixedDepositAmount)}</b></li>}
+                  {selectedRainyDaysAmount > 0 && <li><span>Rainy Days pocket top-up</span><b>{formatRupees(selectedRainyDaysAmount)}</b></li>}
+                </ul>
+                <div className="transfer-demo-code"><strong>Demo code: 123456.</strong> This prototype has no real one-time password. In production, your bank would send a code to your registered device. Never share it with anyone, including the assistant.</div>
+                <label className="transfer-otp-label" htmlFor={`allocation-otp-${turn.id}`}>One-time code</label>
+                <input autoComplete="one-time-code" className="transfer-otp-input" id={`allocation-otp-${turn.id}`} inputMode="numeric" maxLength={6} onChange={(event) => { setAllocationOtp(event.target.value.replace(/\D/g, "").slice(0, 6)); setAllocationError(""); }} placeholder="6 digits" value={allocationOtp} />
+                <p className={`transfer-otp-hint ${allocationError ? "has-error" : ""}`} role={allocationError ? "alert" : undefined}>{allocationError || `${3 - allocationAttempts} attempt${allocationAttempts === 1 ? "" : "s"} left. Only the options above will be applied.`}</p>
+                <div className="allocation-review-actions">
+                  <button onClick={() => { setAllocationOtp(""); setAllocationError(""); setAllocationStep("review"); }} type="button">Back</button>
+                  <button disabled={allocationOtp.length !== 6 || allocationAttempts >= 3} onClick={confirmSelectedAllocations} type="button">Confirm selected <Icon name="check" size={15} /></button>
+                </div>
+              </div>
+            )) }
             {showLoanGuidance && personalLoan && <div className="loan-context-card">
               <div><span><Icon name="card" size={16} /></span><small>Personal loan outstanding</small><strong>{personalLoan.amount.trim()}</strong></div>
               <p><span>Monthly EMI <b>{formatRupees(PERSONAL_LOAN_EMI)}</b></span><span>Due <b>{PERSONAL_LOAN_NEXT_DUE}</b></span><span>{PERSONAL_LOAN_REMAINING_INSTALLMENTS} instalments left</span></p>
             </div>}
-            {showPocketGuidance && visiblePockets.map(renderPocketCard)}
+            {showPocketGuidance && visiblePockets.map((pocket) => renderPocketCard(pocket))}
             <div className="answer-disclaimer"><Icon name="lock" size={15} /> Equitas AI provides general information. Review the details before making a financial decision.</div>
           </div>
         )}
@@ -1464,9 +1725,12 @@ function ChatTurnView({ accountBalance = "₹1,20,430", accountNumber = "4821 �
 function ChatPanel({
   accountBalance,
   accountNumber,
+  onConfirmAllocations,
+  onOpenConsent,
   onRainyTransfer,
   onSupportUpdate,
   pockets,
+  personalised,
   products,
   rainyBalance,
   turns,
@@ -1475,9 +1739,12 @@ function ChatPanel({
 }: {
   accountBalance: string;
   accountNumber: string;
+  onConfirmAllocations: (allocation: InvestmentAllocation) => InvestmentBalances | null;
+  onOpenConsent: () => void;
   onRainyTransfer: (amount: number) => void;
   onSupportUpdate: (turnId: number, field: "supportOptionsOpened" | "supportContactSelected" | "supportTransferConfirmed" | "supportTransferCancelled") => void;
   pockets: Pocket[];
+  personalised: boolean;
   products: Product[];
   rainyBalance: number;
   turns: ChatTurn[];
@@ -1501,13 +1768,14 @@ function ChatPanel({
 
   function runTurn(query: string, answer: string, link = false) {
     const id = Date.now() + Math.random();
+    const startedAt = Date.now();
     const timestamp = new Intl.DateTimeFormat("en-IN", { hour: "2-digit", minute: "2-digit" }).format(new Date());
     setMinimizing(false);
     setExpanded(true);
-    setTurns((current) => [...current, { id, query, answer, link, visibleSteps: 0, timestamp, accountBalanceAtQuery: accountBalance, rainyBalanceAtQuery: rainyBalance, pocketsAtQuery: pockets, productsAtQuery: products }]);
+    setTurns((current) => [...current, { id, query, answer, link, visibleSteps: 0, startedAt, timestamp, accountBalanceAtQuery: accountBalance, rainyBalanceAtQuery: rainyBalance, pocketsAtQuery: pockets, productsAtQuery: products }]);
     thinkingSteps.forEach((_, index) => {
       const timer = window.setTimeout(() => {
-        setTurns((current) => current.map((turn) => turn.id === id ? { ...turn, visibleSteps: index + 1 } : turn));
+        setTurns((current) => current.map((turn) => turn.id === id ? { ...turn, visibleSteps: index + 1, ...(index === thinkingSteps.length - 1 ? { completedAt: Date.now() } : {}) } : turn));
       }, 500 + index * 650);
       timers.current.push(timer);
     });
@@ -1543,54 +1811,67 @@ function ChatPanel({
     <aside className={`chat-panel ${expanded ? "is-expanded" : ""} ${minimizing ? "is-minimizing" : ""}`}>
       <div className="chat-header">
         <span className="assistant-avatar"><Icon name="bank" size={20} /></span>
-        <div><strong>Ask Equitas AI</strong><span>Plan · Save · Invest · Get answers</span></div>
+        <div><strong>Ask Equitas AI</strong><span>{personalised ? "Plan · Save · Invest · Get answers" : "Personalised help, on your terms"}</span></div>
         <div className="chat-header-actions"><small>ONLINE</small><button aria-label={expanded ? "Minimize AI chat" : "Maximize AI chat"} onClick={toggleExpanded} type="button"><Icon name={expanded ? "minimize" : "expand"} size={18} /></button></div>
       </div>
-      <div className="chat-body">
-        {turns.length === 0 && <div className="chat-intro">
-          <div className="chat-bubble chat-bot">
-            Hi {user.firstName}! I’m AIdy, your virtual banking assistant. Try one of these questions to get started.
-          </div>
-        </div>}
-        <div className="chat-messages chat-followup" ref={responseRef}>
-          {turns.map((turn) =>           <ChatTurnView accountBalance={accountBalance} accountNumber={accountNumber} key={turn.id} onRainyTransfer={onRainyTransfer} onSupportUpdate={onSupportUpdate} pockets={pockets} products={products} rainyBalance={rainyBalance} turn={turn} />)}
-          {turns.length > 0 && turns[turns.length - 1].visibleSteps >= thinkingSteps.length && (
-            <div className="chat-topics chat-topics-followup">
-              <div className="chat-suggestions-heading"><span>You could also ask</span></div>
-              {suggestedMessages.map(({ icon, query }) => (
-                <button key={query} onClick={() => ask(query)} type="button">
-                  <span><Icon name={icon} size={16} /></span>
-                  <strong>{query}</strong>
-                  <Icon name="chevron" size={15} />
-                </button>
-              ))}
+      {personalised ? (
+        <>
+          <div className="chat-body">
+            {turns.length === 0 && <div className="chat-intro">
+              <div className="chat-bubble chat-bot">
+                Hi {user.firstName}! I’m AIdy, your virtual banking assistant. Try one of these questions to get started.
+              </div>
+            </div>}
+            <div className="chat-messages chat-followup" ref={responseRef}>
+              {turns.map((turn) =>           <ChatTurnView accountBalance={accountBalance} accountNumber={accountNumber} key={turn.id} onConfirmAllocations={onConfirmAllocations} onRainyTransfer={onRainyTransfer} onSupportUpdate={onSupportUpdate} pockets={pockets} products={products} rainyBalance={rainyBalance} turn={turn} />)}
+              {turns.length > 0 && turns[turns.length - 1].visibleSteps >= thinkingSteps.length && (
+                <div className="chat-topics chat-topics-followup">
+                  <div className="chat-suggestions-heading"><span>You could also ask</span></div>
+                  {suggestedMessages.map(({ icon, query }) => (
+                    <button key={query} onClick={() => ask(query)} type="button">
+                      <span><Icon name={icon} size={16} /></span>
+                      <strong>{query}</strong>
+                      <Icon name="chevron" size={15} />
+                    </button>
+                  ))}
+                </div>
+              )}
             </div>
-          )}
-        </div>
-        {turns.length === 0 && (
-          <div className="chat-topics">
-            <div className="chat-suggestions-heading"><span>Suggested questions</span><small>Based on your accounts</small></div>
-            {suggestedMessages.map(({ icon, query }) => (
-              <button key={query} onClick={() => ask(query)} type="button">
-                <span><Icon name={icon} size={16} /></span>
-                <strong>{query}</strong>
-                <Icon name="chevron" size={15} />
-              </button>
-            ))}
+            {turns.length === 0 && (
+              <div className="chat-topics">
+                <div className="chat-suggestions-heading"><span>Suggested questions</span><small>Based on your accounts</small></div>
+                {suggestedMessages.map(({ icon, query }) => (
+                  <button key={query} onClick={() => ask(query)} type="button">
+                    <span><Icon name={icon} size={16} /></span>
+                    <strong>{query}</strong>
+                    <Icon name="chevron" size={15} />
+                  </button>
+                ))}
+              </div>
+            )}
           </div>
-        )}
-      </div>
-      <div className="compose-wrap">
-        <form className="chat-compose" onSubmit={send}>
-          <input aria-label="Ask Equitas AI" onChange={(event) => setValue(event.target.value)} placeholder="Ask about your money..." value={value} />
-          <button aria-label="Send message" type="submit"><Icon name="arrow" size={19} /></button>
-        </form>
-      </div>
+          <div className="compose-wrap">
+            <form className="chat-compose" onSubmit={send}>
+              <input aria-label="Ask Equitas AI" onChange={(event) => setValue(event.target.value)} placeholder="Ask about your money..." value={value} />
+              <button aria-label="Send message" type="submit"><Icon name="arrow" size={19} /></button>
+            </form>
+          </div>
+        </>
+      ) : (
+        <div className="chat-consent-gate">
+          <span className="chat-consent-icon"><Icon name="shield" size={22} /></span>
+          <span className="eyebrow">Your choice, your data</span>
+          <strong>Personalised guidance, only if you want it</strong>
+          <p>Review your consent preferences to unlock AIdy and insights based on your account activity.</p>
+          <button onClick={onOpenConsent} type="button">Review consent settings <Icon name="arrow" size={15} /></button>
+          <small>You can change your choice at any time.</small>
+        </div>
+      )}
     </aside>
   );
 }
 
-function ConversationHistoryPage({ accountBalance, accountNumber, onClose, pockets, products, rainyBalance, turns }: { accountBalance: string; accountNumber: string; onClose: () => void; pockets: Pocket[]; products: Product[]; rainyBalance: number; turns: ChatTurn[] }) {
+function ConversationHistoryPage({ accountBalance, accountNumber, onClose, onOpenConsent, personalised, pockets, products, rainyBalance, turns }: { accountBalance: string; accountNumber: string; onClose: () => void; onOpenConsent: () => void; personalised: boolean; pockets: Pocket[]; products: Product[]; rainyBalance: number; turns: ChatTurn[] }) {
   const [selectedConversation, setSelectedConversation] = useState<ChatTurn | null>(null);
 
   return (
@@ -1608,28 +1889,52 @@ function ConversationHistoryPage({ accountBalance, accountNumber, onClose, pocke
           <h1>Conversation history</h1>
           <p>Review previous questions, guidance, and account insights.</p>
         </div>
-        <ChatHistory accountBalance={accountBalance} accountNumber={accountNumber} pockets={pockets} products={products} rainyBalance={rainyBalance} selected={selectedConversation} setSelected={setSelectedConversation} showAll turns={turns} />
+        <ChatHistory accountBalance={accountBalance} accountNumber={accountNumber} onOpenConsent={onOpenConsent} personalised={personalised} pockets={pockets} products={products} rainyBalance={rainyBalance} selected={selectedConversation} setSelected={setSelectedConversation} showAll turns={turns} />
       </main>
     </section>
   );
 }
 
-const notifications = [
-  { category: "Account", title: "Salary credited", text: "₹50,000 credited to your Savings Account XXXX1234.", time: "10:32 AM", icon: "arrow" as IconName, tone: "green" },
-  { category: "Payments", title: "Upcoming bill payment", text: "Your electricity bill of ₹2,450 is due on 20 Oct 2026.", time: "Yesterday", icon: "repeat" as IconName, tone: "coral" },
-  { category: "Payments", title: "High spend alert", text: "Food spending is 25% higher than your average.", time: "Yesterday", icon: "card" as IconName, tone: "violet" },
-  { category: "Offers", title: "New FD offer", text: "Get up to 7.25% p.a. on Fixed Deposits.", time: "12 Oct", icon: "deposit" as IconName, tone: "gold" },
-  { category: "Account", title: "Security alert", text: "A new device logged in to your account.", time: "10 Oct", icon: "shield" as IconName, tone: "blue" },
-  { category: "Updates", title: "Guidance from Equitas AI", text: "Based on your spending, you could save ₹1,300 per month.", time: "8 Oct", icon: "bank" as IconName, tone: "blue" },
-  { category: "Offers", title: "Insurance made simple", text: "Explore protection plans suited to your family.", time: "6 Oct", icon: "shield" as IconName, tone: "blue" },
-  { category: "Updates", title: "Statement available", text: "Your September account statement is ready.", time: "2 Oct", icon: "mail" as IconName, tone: "blue" },
+type NotificationItem = { id: string; category: string; title: string; text: string; time: string; icon: IconName; tone: string };
+type TransferNotification = NotificationItem & { transferId: string };
+
+function playTransferNotificationSound() {
+  if (!window.AudioContext) return;
+  const audioContext = new window.AudioContext();
+  const oscillator = audioContext.createOscillator();
+  const volume = audioContext.createGain();
+  const startAt = audioContext.currentTime;
+  oscillator.type = "sine";
+  oscillator.frequency.setValueAtTime(660, startAt);
+  oscillator.frequency.setValueAtTime(880, startAt + 0.12);
+  volume.gain.setValueAtTime(0.0001, startAt);
+  volume.gain.exponentialRampToValueAtTime(0.08, startAt + 0.02);
+  volume.gain.setValueAtTime(0.08, startAt + 0.12);
+  volume.gain.exponentialRampToValueAtTime(0.0001, startAt + 0.28);
+  oscillator.connect(volume);
+  volume.connect(audioContext.destination);
+  oscillator.onended = () => { void audioContext.close(); };
+  oscillator.start(startAt);
+  oscillator.stop(startAt + 0.28);
+}
+
+const notifications: NotificationItem[] = [
+  { id: "salary-credited", category: "Account", title: "Salary credited", text: "₹50,000 credited to your Savings Account XXXX1234.", time: "10:32 AM", icon: "arrow", tone: "green" },
+  { id: "upcoming-bill", category: "Payments", title: "Upcoming bill payment", text: "Your electricity bill of ₹2,450 is due on 20 Oct 2026.", time: "Yesterday", icon: "repeat", tone: "coral" },
+  { id: "high-spend-alert", category: "Payments", title: "High spend alert", text: "Food spending is 25% higher than your average.", time: "Yesterday", icon: "card", tone: "violet" },
+  { id: "new-fd-offer", category: "Offers", title: "New FD offer", text: "Get up to 7.25% p.a. on Fixed Deposits.", time: "12 Oct", icon: "deposit", tone: "gold" },
+  { id: "security-alert", category: "Account", title: "Security alert", text: "A new device logged in to your account.", time: "10 Oct", icon: "shield", tone: "blue" },
+  { id: "ai-guidance", category: "Updates", title: "Guidance from Equitas AI", text: "Based on your spending, you could save ₹1,300 per month.", time: "8 Oct", icon: "bank", tone: "blue" },
+  { id: "insurance-offer", category: "Offers", title: "Insurance made simple", text: "Explore protection plans suited to your family.", time: "6 Oct", icon: "shield", tone: "blue" },
+  { id: "statement-available", category: "Updates", title: "Statement available", text: "Your September account statement is ready.", time: "2 Oct", icon: "mail", tone: "blue" },
 ];
 
-function NotificationDrawer({ open, onClose }: { open: boolean; onClose: () => void }) {
+function NotificationDrawer({ open, onClose, transferNotifications }: { open: boolean; onClose: () => void; transferNotifications: TransferNotification[] }) {
   const [tab, setTab] = useState("All");
   const [readItems, setReadItems] = useState<string[]>([]);
   const tabs = ["All", "Account", "Payments", "Offers", "Updates"];
-  const visibleNotifications = tab === "All" ? notifications : notifications.filter((item) => item.category === tab);
+  const allNotifications = [...transferNotifications, ...notifications];
+  const visibleNotifications = tab === "All" ? allNotifications : allNotifications.filter((item) => item.category === tab);
   return (
     <>
       <button aria-label="Close notifications" className={`drawer-overlay ${open ? "is-open" : ""}`} onClick={onClose} type="button" />
@@ -1640,13 +1945,13 @@ function NotificationDrawer({ open, onClose }: { open: boolean; onClose: () => v
         </div>
         <div className="notification-tabs">
           {tabs.map((item) => {
-            const count = item === "All" ? notifications.length : notifications.filter((notification) => notification.category === item).length;
+            const count = item === "All" ? allNotifications.length : allNotifications.filter((notification) => notification.category === item).length;
             return <button className={tab === item ? "active" : ""} key={item} onClick={() => setTab(item)} type="button">{item} ({count})</button>;
           })}
         </div>
         <div className="notification-list">
           {visibleNotifications.map((item) => (
-            <button className={`notification-row ${readItems.includes(item.title) ? "is-read" : ""}`} key={item.title} onClick={() => setReadItems((current) => current.includes(item.title) ? current : [...current, item.title])} type="button">
+            <button className={`notification-row ${readItems.includes(item.id) ? "is-read" : ""}`} key={item.id} onClick={() => setReadItems((current) => current.includes(item.id) ? current : [...current, item.id])} type="button">
               <span className={`product-icon product-icon-${item.tone}`}><Icon name={item.icon} size={19} /></span>
               <span><strong>{item.title}</strong><small>{item.text}</small></span>
               <time>{item.time}<i /></time>
@@ -1703,7 +2008,7 @@ const expensePeriods = [
   },
 ];
 
-function ExpenseCard({ useLargeValues = false }: { useLargeValues?: boolean }) {
+function ExpenseCard({ showAiInsight, useLargeValues = false }: { showAiInsight: boolean; useLargeValues?: boolean }) {
   const [periodIndex, setPeriodIndex] = useState(0);
   const [filterOpen, setFilterOpen] = useState(false);
   const basePeriod = expensePeriods[periodIndex];
@@ -1753,7 +2058,7 @@ function ExpenseCard({ useLargeValues = false }: { useLargeValues?: boolean }) {
           <div className="expense-total-card" key={period.label}>
             <div className="expense-chart-summary">
               <div><span>Total spent</span><strong style={{ fontSize: `${amountFontSize}px` }} title={period.total}>{period.total}</strong></div>
-              <small><Icon name="chart" size={13} /> {period.comparison}</small>
+              {showAiInsight && <small><Icon name="chart" size={13} /> {period.comparison}</small>}
             </div>
           </div>
           <div className="legend">
@@ -1768,13 +2073,15 @@ function ExpenseCard({ useLargeValues = false }: { useLargeValues?: boolean }) {
             ))}
           </div>
         </div>
-        <div className="expense-ai">
-          <span className="expense-ai-icon"><Icon name="chart" size={17} /></span>
-          <div>
-            <span>AI spending insight · {period.comparison}</span>
-            <p>{period.insight}</p>
+        {showAiInsight && (
+          <div className="expense-ai">
+            <span className="expense-ai-icon"><Icon name="chart" size={17} /></span>
+            <div>
+              <span>AI spending insight · {period.comparison}</span>
+              <p>{period.insight}</p>
+            </div>
           </div>
-        </div>
+        )}
       </div>
     </div>
   );
@@ -1795,7 +2102,8 @@ function InsightCard({ description, icon, label, tone }: { description: string; 
   );
 }
 
-function Dashboard({ onLogout, setChatTurns, chatTurns, user }: { onLogout: () => void; setChatTurns: Dispatch<SetStateAction<ChatTurn[]>>; chatTurns: ChatTurn[]; user: MockUser }) {
+function Dashboard({ onLogout, onTransferRecorded, setChatTurns, chatTurns, user }: { onLogout: () => void; onTransferRecorded: (transfer: ChatTransfer) => void; setChatTurns: Dispatch<SetStateAction<ChatTurn[]>>; chatTurns: ChatTurn[]; user: MockUser }) {
+  const consentStorageKey = `equitas-personalised-insights:${user.id}`;
   const largeProductAmounts = [
     "₹ 10,00,00,00,00,000",
     "₹ 8,75,00,00,000",
@@ -1807,19 +2115,34 @@ function Dashboard({ onLogout, setChatTurns, chatTurns, user }: { onLogout: () =
   const [profileOpen, setProfileOpen] = useState(false);
   const [historyExpanded, setHistoryExpanded] = useState(false);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
+  const [transferNotifications, setTransferNotifications] = useState<TransferNotification[]>([]);
+  const [transferToast, setTransferToast] = useState<TransferNotification | null>(null);
+  const [personalised, setPersonalised] = useState(() => window.localStorage.getItem(consentStorageKey) === "enabled");
+  const [consentPromptOpen, setConsentPromptOpen] = useState(() => window.localStorage.getItem(consentStorageKey) === null);
   const [productIndex, setProductIndex] = useState(0);
   const [profileDetail, setProfileDetail] = useState<string | null>(null);
   const [scrollProfileToProducts, setScrollProfileToProducts] = useState(false);
   const [rainyBalance, setRainyBalance] = useState(25500);
   const [customPockets, setCustomPockets] = useState<Pocket[]>([{ name: "Travel", balance: 0, goal: 30000 }]);
+  const [fixedDepositBalance, setFixedDepositBalance] = useState(() => parseCurrencyAmount(user.id === "444444444" ? largeProductAmounts[1] : allProducts[1].amount));
+  const [hasAdditionalFixedDeposit, setHasAdditionalFixedDeposit] = useState(false);
   const initialSavingsBalance = user.id === "444444444"
     ? parseCurrencyAmount(largeProductAmounts[0])
     : parseCurrencyAmount(allProducts[0].amount);
   const [savingsBalance, setSavingsBalance] = useState(initialSavingsBalance);
+  useEffect(() => {
+    if (!transferToast) return;
+    const timeout = window.setTimeout(() => setTransferToast(null), 5000);
+    return () => window.clearTimeout(timeout);
+  }, [transferToast]);
   const availableProducts = allProducts.slice(0, user.productCount).map((product, index) => {
     if (index === 0) return { ...product, amount: `₹ ${savingsBalance.toLocaleString("en-IN")}` };
+    if (index === 1) return { ...product, amount: `₹ ${fixedDepositBalance.toLocaleString("en-IN")}` };
     return user.id === "444444444" ? { ...product, amount: largeProductAmounts[index] } : product;
   });
+  if (hasAdditionalFixedDeposit && !availableProducts.some((product) => product.type === "Fixed deposits")) {
+    availableProducts.push({ ...allProducts[1], amount: `₹ ${fixedDepositBalance.toLocaleString("en-IN")}`, number: "New 6-month deposit" });
+  }
   const userProducts = availableProducts.some((product) => product.type === "Personal loan")
     ? availableProducts
     : [...availableProducts, ...allProducts.filter((product) => product.type === "Personal loan")];
@@ -1830,8 +2153,75 @@ function Dashboard({ onLogout, setChatTurns, chatTurns, user }: { onLogout: () =
   const profileProducts = userProducts;
   const pockets: Pocket[] = [{ name: "Rainy Days", balance: rainyBalance, goal: 50000 }, ...customPockets];
 
+  function recordChatTransfer(to: string, amount: number) {
+    if (amount <= 0) return;
+    const confirmedAt = new Date();
+    const transferId = `${user.id}-${confirmedAt.getTime()}-${Math.random()}`;
+    const notification: TransferNotification = {
+      id: transferId,
+      transferId,
+      category: "Account",
+      title: "Chat transfer confirmed",
+      text: `${formatRupees(amount)} transferred from Savings account to ${to}.`,
+      time: confirmedAt.toLocaleTimeString("en-IN", { hour: "2-digit", minute: "2-digit" }),
+      icon: "repeat",
+      tone: "green",
+    };
+    playTransferNotificationSound();
+    setTransferNotifications((current) => [notification, ...current]);
+    setTransferToast(notification);
+    onTransferRecorded({
+      id: transferId,
+      customerId: user.id,
+      from: "Savings account",
+      to,
+      amount,
+      confirmedAt: confirmedAt.toISOString(),
+    });
+  }
+
+  function applyRainyDaysTransfer(amount: number) {
+    if (amount <= 0) return;
+    setRainyBalance((current) => current + amount);
+    setSavingsBalance((current) => Math.max(0, current - amount));
+    recordChatTransfer("Rainy Days pocket", amount);
+  }
+
   function openUpcomingActivity(type: string) {
     setProfileDetail(type);
+    setProfileOpen(true);
+  }
+
+  function updatePersonalisedConsent(enabled: boolean) {
+    window.localStorage.setItem(consentStorageKey, enabled ? "enabled" : "disabled");
+    setPersonalised(enabled);
+    setConsentPromptOpen(false);
+  }
+
+  function confirmInvestmentAllocation(allocation: InvestmentAllocation): InvestmentBalances | null {
+    const total = allocation.fixedDepositAmount + allocation.rainyDaysAmount;
+    if (total <= 0 || savingsBalance - total < allocation.minimumSavingsBalance) return null;
+    setSavingsBalance((balance) => balance - total);
+    if (allocation.fixedDepositAmount > 0) {
+      setFixedDepositBalance((balance) => balance + allocation.fixedDepositAmount);
+      setHasAdditionalFixedDeposit(true);
+    }
+    if (allocation.rainyDaysAmount > 0) {
+      setRainyBalance((balance) => balance + allocation.rainyDaysAmount);
+      recordChatTransfer("Rainy Days pocket", allocation.rainyDaysAmount);
+    }
+    if (allocation.fixedDepositAmount > 0) {
+      recordChatTransfer("Fixed Deposit · 6 months", allocation.fixedDepositAmount);
+    }
+    return {
+      savings: savingsBalance - total,
+      fixedDeposits: fixedDepositBalance + allocation.fixedDepositAmount,
+      rainyDays: rainyBalance + allocation.rainyDaysAmount,
+    };
+  }
+
+  function openConsentSettings() {
+    setProfileDetail("Consent");
     setProfileOpen(true);
   }
 
@@ -1840,7 +2230,10 @@ function Dashboard({ onLogout, setChatTurns, chatTurns, user }: { onLogout: () =
       <header className="app-header">
         <Logo />
         <div className="header-actions">
-          <button aria-label="Notifications" className="icon-button notification" onClick={() => setNotificationsOpen(true)} type="button"><Icon name="bell" /><i /></button>
+          <span className="notification-anchor">
+            <button aria-label="Notifications" className="icon-button notification" onClick={() => setNotificationsOpen(true)} type="button"><Icon name="bell" /><i /></button>
+            {transferToast && <div className="transfer-toast" role="status"><span className="transfer-toast-icon"><Icon name="check" size={17} /></span><span><strong>Transfer confirmed</strong><small>{transferToast.text}</small></span><button aria-label="Dismiss transfer notification" onClick={() => setTransferToast(null)} type="button"><Icon name="close" size={15} /></button></div>}
+          </span>
           <button aria-label="Open profile menu" className="mobile-profile" onClick={() => setProfileOpen(true)} type="button"><Icon name="user" /></button>
           <button className="profile-trigger" onClick={() => setProfileOpen(true)} type="button">
             <span className="avatar"><Icon name="user" size={19} /></span>
@@ -1854,7 +2247,7 @@ function Dashboard({ onLogout, setChatTurns, chatTurns, user }: { onLogout: () =
         <div className="dashboard-layout">
           <div className="dashboard-main">
             <section className="welcome-row">
-              <div className="welcome-message"><h1>Good morning, {user.firstName}!</h1><p>Here’s your financial snapshot. Ask AIdy for anything else.</p></div>
+              <div className="welcome-message"><h1>Good morning, {user.firstName}!</h1><p>{personalised ? "Here’s your financial snapshot. Ask AIdy for anything else." : "Here’s your financial snapshot. Personalised guidance is optional."}</p></div>
               <span className="welcome-date">Wednesday, 15 October</span>
             </section>
             <section className="top-grid">
@@ -1899,7 +2292,7 @@ function Dashboard({ onLogout, setChatTurns, chatTurns, user }: { onLogout: () =
               </div>
             </section>
             <section className="content-grid">
-              <ExpenseCard useLargeValues={user.id === "444444444"} />
+              <ExpenseCard showAiInsight={personalised} useLargeValues={user.id === "444444444"} />
               <div className="upcoming-card panel">
                 <div className="block-heading">
                   <div><span className="eyebrow">Coming up</span><h2>Payments & maturities</h2></div>
@@ -1910,18 +2303,32 @@ function Dashboard({ onLogout, setChatTurns, chatTurns, user }: { onLogout: () =
                 </div>
               </div>
             </section>
-            <section className="insights">
+            {personalised && <section className="insights">
               <div className="block-heading"><div><span className="eyebrow">Made for you</span><h2>Smart money insights</h2></div><span className="insight-badge">Today</span></div>
               <div className="insight-grid">
                 <InsightCard description="Saving half your travel spend could add ₹4,800 to an FD while helping you build a stronger monthly emergency buffer." icon="chart" label="SPENDING INSIGHT" tone="cyan" />
                 <InsightCard description="A weekly shopping limit could free up ₹2,130 monthly and keep discretionary spending within your preferred budget." icon="card" label="SAVINGS TIP" tone="pink" />
                 <InsightCard description="A one-year fixed deposit of ₹50,000 may return about ₹3,250 based on the currently displayed indicative rate." icon="fund" label="GROWTH" tone="green" />
               </div>
-            </section>
+            </section>}
           </div>
-          <ChatPanel accountBalance={userProducts[0]?.amount ?? "₹1,20,430"} accountNumber={userProducts[0]?.number ?? "4821 •••• •••• 1234"} onRainyTransfer={(amount) => { setRainyBalance((current) => current + amount); setSavingsBalance((current) => Math.max(0, current - amount)); }} onSupportUpdate={(turnId, field) => setChatTurns((current) => current.map((turn) => turn.id === turnId ? { ...turn, [field]: true } : turn))} pockets={pockets} products={userProducts} rainyBalance={rainyBalance} setTurns={setChatTurns} turns={chatTurns} user={user} />
+          <ChatPanel accountBalance={userProducts[0]?.amount ?? "₹1,20,430"} accountNumber={userProducts[0]?.number ?? "4821 •••• •••• 1234"} onConfirmAllocations={confirmInvestmentAllocation} onOpenConsent={openConsentSettings} onRainyTransfer={applyRainyDaysTransfer} onSupportUpdate={(turnId, field) => setChatTurns((current) => current.map((turn) => turn.id === turnId ? { ...turn, [field]: true } : turn))} pockets={pockets} personalised={personalised} products={userProducts} rainyBalance={rainyBalance} setTurns={setChatTurns} turns={chatTurns} user={user} />
         </div>
       </main>
+      {consentPromptOpen && (
+        <div className="consent-prompt-backdrop">
+          <section aria-labelledby="first-consent-title" aria-modal="true" className="first-consent-prompt" role="dialog">
+            <span className="first-consent-icon"><Icon name="shield" size={22} /></span>
+            <span className="eyebrow">Your choice, your control</span>
+            <h2 id="first-consent-title">Enable personalised insights?</h2>
+            <p>Allow AIdy to use your account balances, transactions and upcoming payments to provide relevant insights and suggestions. You can change this anytime in Profile → Consent.</p>
+            <div className="first-consent-actions">
+              <button className="first-consent-keep-off" onClick={() => updatePersonalisedConsent(false)} type="button">Keep insights off</button>
+              <button className="first-consent-enable" onClick={() => updatePersonalisedConsent(true)} type="button">Enable insights</button>
+            </div>
+          </section>
+        </div>
+      )}
       <ProfileDrawer
         initialDetail={profileDetail}
         key={`${user.id}-${profileDetail ?? "profile"}`}
@@ -1930,19 +2337,21 @@ function Dashboard({ onLogout, setChatTurns, chatTurns, user }: { onLogout: () =
         onProductsScrollComplete={() => setScrollProfileToProducts(false)}
         onClose={() => { setProfileOpen(false); setProfileDetail(null); }}
         onExpandHistory={() => setHistoryExpanded(true)}
+        onPersonalisedChange={updatePersonalisedConsent}
         onPocketCreated={(name, goal) => {
           setCustomPockets((current) => [...current, { name, goal, balance: 0 }]);
           setProfileDetail("My pockets");
         }}
         onLogout={onLogout}
         pockets={pockets}
+        personalised={personalised}
         products={profileProducts}
         rainyBalance={rainyBalance}
         turns={chatTurns}
         user={user}
       />
-      {historyExpanded && <ConversationHistoryPage accountBalance={userProducts[0]?.amount ?? "₹1,20,430"} accountNumber={userProducts[0]?.number ?? "4821 •••• •••• 1234"} onClose={() => setHistoryExpanded(false)} pockets={pockets} products={userProducts} rainyBalance={rainyBalance} turns={chatTurns} />}
-      <NotificationDrawer open={notificationsOpen} onClose={() => setNotificationsOpen(false)} />
+      {historyExpanded && <ConversationHistoryPage accountBalance={userProducts[0]?.amount ?? "₹1,20,430"} accountNumber={userProducts[0]?.number ?? "4821 •••• •••• 1234"} onClose={() => setHistoryExpanded(false)} onOpenConsent={() => { setHistoryExpanded(false); openConsentSettings(); }} personalised={personalised} pockets={pockets} products={userProducts} rainyBalance={rainyBalance} turns={chatTurns} />}
+      <NotificationDrawer open={notificationsOpen} onClose={() => setNotificationsOpen(false)} transferNotifications={transferNotifications} />
     </div>
   );
 }
@@ -1951,6 +2360,7 @@ export default function App() {
   const [user, setUser] = useState<MockUser | null>(null);
   const [adminOpen, setAdminOpen] = useState(false);
   const [conversationsByCustomer, setConversationsByCustomer] = useState<Record<string, ChatTurn[]>>({});
+  const [transfersByCustomer, setTransfersByCustomer] = useState<Record<string, ChatTransfer[]>>({});
 
   if (user) {
     const setCustomerTurns: Dispatch<SetStateAction<ChatTurn[]>> = (action) => {
@@ -1959,8 +2369,8 @@ export default function App() {
         [user.id]: typeof action === "function" ? action(current[user.id] ?? []) : action,
       }));
     };
-    return <Dashboard chatTurns={conversationsByCustomer[user.id] ?? []} onLogout={() => setUser(null)} setChatTurns={setCustomerTurns} user={user} />;
+    return <Dashboard chatTurns={conversationsByCustomer[user.id] ?? []} onLogout={() => setUser(null)} onTransferRecorded={(transfer) => setTransfersByCustomer((current) => ({ ...current, [transfer.customerId]: [...(current[transfer.customerId] ?? []), transfer] }))} setChatTurns={setCustomerTurns} user={user} />;
   }
-  if (adminOpen) return <AdminWorkspace onBack={() => setAdminOpen(false)} conversationsByCustomer={conversationsByCustomer} />;
+  if (adminOpen) return <AdminWorkspace onBack={() => setAdminOpen(false)} conversationsByCustomer={conversationsByCustomer} transfersByCustomer={transfersByCustomer} />;
   return <Login onAdmin={() => setAdminOpen(true)} onLogin={setUser} />;
 }
