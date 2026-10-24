@@ -1841,6 +1841,7 @@ function Dashboard({ onLogout, setChatTurns, chatTurns, user }: { onLogout: () =
         <Logo />
         <div className="header-actions">
           <button aria-label="Notifications" className="icon-button notification" onClick={() => setNotificationsOpen(true)} type="button"><Icon name="bell" /><i /></button>
+          <button aria-label="Open profile menu" className="mobile-profile" onClick={() => setProfileOpen(true)} type="button"><Icon name="user" /></button>
           <button className="profile-trigger" onClick={() => setProfileOpen(true)} type="button">
             <span className="avatar"><Icon name="user" size={19} /></span>
             <span><strong>{user.name}</strong><small>View profile</small></span>
@@ -1855,7 +1856,6 @@ function Dashboard({ onLogout, setChatTurns, chatTurns, user }: { onLogout: () =
             <section className="welcome-row">
               <div className="welcome-message"><h1>Good morning, {user.firstName}!</h1><p>Here’s your financial snapshot. Ask AIdy for anything else.</p></div>
               <span className="welcome-date">Wednesday, 15 October</span>
-              <button className="mobile-profile" onClick={() => setProfileOpen(true)} type="button"><Icon name="menu" /></button>
             </section>
             <section className="top-grid">
               <ProductCard index={productIndex} items={userProducts} onChange={setProductIndex} />

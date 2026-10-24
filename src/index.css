@@ -837,6 +837,17 @@ button:focus-visible, input:focus-visible { outline: 3px solid rgba(25, 118, 233
   }
 }
 
+@media (max-width: 760px) {
+  .profile-drawer {
+    top: 0;
+    right: 0;
+    bottom: 0;
+    width: min(320px, calc(100% - 48px));
+    overflow: hidden;
+    border-radius: 18px 0 0 18px;
+  }
+}
+
 .portfolio-ring {
   position: relative;
 }
@@ -8986,5 +8997,51 @@ button:focus-visible, input:focus-visible { outline: 3px solid rgba(25, 118, 233
     width: 1px;
     height: 10px;
     margin: auto;
+  }
+}
+
+@media (max-width: 760px) {
+  .chat-panel.is-expanded .analysis-combined,
+  .chat-panel.is-expanded .thinking-card:not(:has(.workspace-answer)) .analysis-combined {
+    grid-template-columns: minmax(0, 1fr) !important;
+    min-width: 0 !important;
+  }
+
+  .chat-panel.is-expanded .thinking-layout {
+    width: 100%;
+    min-width: 0;
+    grid-template-columns: minmax(0, 1fr);
+  }
+
+  .chat-panel.is-expanded .thinking-summary,
+  .chat-panel.is-expanded .flow-view {
+    display: none !important;
+  }
+
+  .chat-panel.is-expanded .thinking-steps {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 10px;
+    padding: 14px;
+  }
+
+  .chat-panel.is-expanded .thinking-steps > div {
+    min-height: 44px;
+    grid-template-columns: 26px 36px minmax(0, 1fr);
+    gap: 8px;
+    padding-right: 0;
+  }
+
+  .chat-panel.is-expanded .thinking-steps strong {
+    font-size: 9px;
+  }
+
+  .chat-panel.is-expanded .thinking-steps small {
+    font-size: 8px;
+  }
+}
+
+@media (max-width: 760px) {
+  .rainy-modal {
+    width: min(380px, calc(100vw - 48px));
   }
 }
