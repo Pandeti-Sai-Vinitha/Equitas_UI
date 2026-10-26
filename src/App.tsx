@@ -149,11 +149,14 @@ type MockUser = {
 };
 
 const mockUsers: MockUser[] = [
-  { id: "123456789", name: "Rajesh Harikrishnan", firstName: "Rajesh", email: "rajesh.harish@email.com", productCount: 4, dateOfBirth: "15 Mar 1998", gender: "Male", mobile: "+91 98765 43210", mailingAddress: "24, MG Road, Bengaluru – 560001" },
+  { id: "123456789", name: "Rajesh Harikrishnan", firstName: "Rajesh", email: "rajesh.harish@email.com", productCount: 3, dateOfBirth: "15 Mar 1998", gender: "Male", mobile: "+91 98765 43210", mailingAddress: "24, MG Road, Bengaluru – 560001" },
   { id: "222222222", name: "Meera Nair", firstName: "Meera", email: "meera.nair@email.com", productCount: 2, dateOfBirth: "22 Jul 1994", gender: "Female", mobile: "+91 98450 12345", mailingAddress: "18, Lake View Road, Kochi – 682016" },
   { id: "333333333", name: "Arjun Menon", firstName: "Arjun", email: "arjun.menon@email.com", productCount: 1, dateOfBirth: "08 Nov 1992", gender: "Male", mobile: "+91 98100 23456", mailingAddress: "42, Anna Salai, Chennai – 600002" },
   { id: "444444444", name: "Kavya Srinivasan", firstName: "Kavya", email: "kavya.s@email.com", productCount: 6, dateOfBirth: "03 Feb 1996", gender: "Female", mobile: "+91 98200 34567", mailingAddress: "7, Residency Road, Bengaluru – 560025" },
 ];
+
+const defaultDemoUser = mockUsers[0];
+const defaultDemoPassword = "securepass";
 
 type RegisteredAccount = {
   user: MockUser;
@@ -239,8 +242,8 @@ function Login({ onAdmin, onLogin, onRegister, registeredAccounts }: { onAdmin: 
   const [mode, setMode] = useState<"signin" | "signup">("signin");
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
-  const [password, setPassword] = useState("");
-  const [customerId, setCustomerId] = useState("");
+  const [password, setPassword] = useState(defaultDemoPassword);
+  const [customerId, setCustomerId] = useState(defaultDemoUser.id);
   const [fullName, setFullName] = useState("");
   const [email, setEmail] = useState("");
   const [mobile, setMobile] = useState("");
@@ -341,7 +344,7 @@ function Login({ onAdmin, onLogin, onRegister, registeredAccounts }: { onAdmin: 
         <div className="mobile-logo"><Logo /></div>
         <form className={`login-card ${mode === "signup" ? "is-signup" : ""}`} onSubmit={submit}>
           <div aria-label="Account access" className="auth-mode-switch" role="tablist">
-            <button aria-selected={mode === "signin"} className={mode === "signin" ? "active" : ""} onClick={() => { setMode("signin"); setLoginNotice(""); setPassword(""); }} role="tab" type="button">Sign in</button>
+            <button aria-selected={mode === "signin"} className={mode === "signin" ? "active" : ""} onClick={() => { setMode("signin"); setLoginNotice(""); setCustomerId(defaultDemoUser.id); setPassword(defaultDemoPassword); }} role="tab" type="button">Sign in</button>
             <button aria-selected={mode === "signup"} className={mode === "signup" ? "active" : ""} onClick={() => { setMode("signup"); setLoginNotice(""); setPassword(""); }} role="tab" type="button">Sign up</button>
           </div>
           <div className="login-heading">
@@ -401,7 +404,6 @@ function Login({ onAdmin, onLogin, onRegister, registeredAccounts }: { onAdmin: 
             {loading ? (mode === "signin" ? "Signing in..." : "Creating account...") : (mode === "signin" ? "Sign in securely" : "Create account")}
             {!loading && <Icon name="arrow" size={18} />}
           </button>
-          {mode === "signup" && <p className="signup-demo-note">Your profile is saved on this device. Banking details shown are sample values.</p>}
           <p className="security-note"><Icon name="shield" size={16} /> 256-bit encrypted and securely protected</p>
           <button className="admin-entry-link" onClick={onAdmin} type="button">Admin</button>
         </form>
@@ -413,14 +415,15 @@ function Login({ onAdmin, onLogin, onRegister, registeredAccounts }: { onAdmin: 
 function ProductCard({ index, items, onChange }: { index: number; items: Product[]; onChange: (index: number) => void }) {
   const product = items[index];
   const [balanceVisible, setBalanceVisible] = useState(true);
-  const cardDetails = [
-    { account: "Salary Account · •• 4821", activity: "₹85,000 salary credited yesterday", rate: "3.1% p.a." },
-    { account: "2 active fixed deposits", activity: "₹50,000 matures on 15 Mar 2027", rate: "Up to 7.25%" },
-    { account: "Recurring Deposit · •• 7624", activity: "Next instalment ₹3,000 on 5 Nov", rate: "6.8% p.a." },
-    { account: "3 active mutual funds", activity: "Portfolio gained ₹1,860 this month", rate: "+8.2% returns" },
-    { account: "Personal Loan · •• 3092", activity: `Next EMI ${formatRupees(PERSONAL_LOAN_EMI)} on 2 Nov`, rate: PERSONAL_LOAN_RATE },
-    { account: "Family protection plan", activity: "Premium paid until 30 Jun 2027", rate: "Active" },
-  ][index];
+  const accountDetails: Record<string, { account: string; activity: string; rate: string }> = {
+    "Savings account": { account: "Salary Account · •• 4821", activity: "₹85,000 salary credited yesterday", rate: "3.1% p.a." },
+    "Fixed deposits": { account: "2 active fixed deposits", activity: "₹50,000 matures on 15 Mar 2027", rate: "Up to 7.25%" },
+    "Recurring deposit": { account: "Recurring Deposit · •• 7624", activity: "Next instalment ₹3,000 on 5 Nov", rate: "6.8% p.a." },
+    "Mutual funds": { account: "3 active mutual funds", activity: "Portfolio gained ₹1,860 this month", rate: "+8.2% returns" },
+    "Personal loan": { account: "Personal Loan · •• 3092", activity: `Next EMI ${formatRupees(PERSONAL_LOAN_EMI)} on 2 Nov`, rate: PERSONAL_LOAN_RATE },
+    Insurance: { account: "Family protection plan", activity: "Premium paid until 30 Jun 2027", rate: "Active" },
+  };
+  const cardDetails = accountDetails[product.type];
 
   useEffect(() => {
     if (items.length < 2) return;
@@ -822,7 +825,7 @@ const sampleHistory: ChatTurn[] = [
   { id: -1, title: "How much can I save?", query: "How much can I save?", answer: "I reviewed your accounts and cash flow. You can safely plan this while retaining enough for upcoming commitments.", link: false, visibleSteps: 5, timestamp: "Just now" },
   { id: -2, title: "Salary credited — move to Rainy days", query: "My salary of ₹45,000 has been credited. Can I save ₹7,250?", answer: "You can move ₹7,250 to Rainy days while keeping a comfortable buffer.", link: false, visibleSteps: 5, timestamp: "Today, 10:14 AM" },
   { id: -3, title: "What is my account balance?", query: "What is my account balance?", answer: "Your available account balance is ₹1,20,430.", link: false, visibleSteps: 5, timestamp: "14 Oct 2026" },
-  { id: -4, title: "Can I invest in a mutual fund?", query: "Can I invest in a mutual fund?", answer: "After keeping ₹50,000 accessible and reserving ₹9,250 for your 2 Nov loan EMI, you could consider a ₹40,000 six-month FD and a ₹7,250 Rainy Days top-up. Review your existing mutual funds before adding another SIP.", link: false, visibleSteps: 5, timestamp: "12 Oct 2026" },
+  { id: -4, title: "Can I invest my savings?", query: "Can I invest my savings?", answer: "After keeping ₹50,000 accessible and reserving ₹9,250 for your 2 Nov loan EMI, you could consider a ₹40,000 six-month FD and a ₹7,250 Rainy Days top-up while continuing your existing recurring deposit.", link: false, visibleSteps: 5, timestamp: "12 Oct 2026" },
   { id: -5, title: "Show recent transactions", query: "Show my recent transactions", answer: "I found your recent account activity and grouped it for review.", link: false, visibleSteps: 5, timestamp: "10 Oct 2026" },
   { id: -6, title: "Plan a fixed deposit", query: "Suggest a fixed deposit plan", answer: "A six-month fixed deposit can keep your money safe while providing a predictable return. Keep your ₹9,250 loan EMI and emergency buffer accessible, and consider a ₹7,250 Rainy Days top-up.", link: false, visibleSteps: 5, timestamp: "8 Oct 2026" },
   { id: -7, title: "Personal loan repayment", query: "What is my personal loan EMI?", answer: `Your personal loan has ${PERSONAL_LOAN_OUTSTANDING} outstanding, with a ${formatRupees(PERSONAL_LOAN_EMI)} monthly EMI due ${PERSONAL_LOAN_NEXT_DUE}.`, link: false, visibleSteps: 5, timestamp: "6 Oct 2026" },
@@ -872,9 +875,9 @@ const seedAdminConversations: Record<string, AdminConversation[]> = {
       title: "Salary credited — savings guidance",
       time: "23 Oct 2026, 12:42 PM",
       messages: [
-        { speaker: "Assistant", time: "12:40 PM", text: `Your available savings balance is ₹1,20,430. I’ll keep ₹50,000 as a buffer and reserve your ${formatRupees(PERSONAL_LOAN_EMI)} EMI due ${PERSONAL_LOAN_NEXT_DUE}. Your current holdings include fixed deposits, a recurring deposit, mutual funds, and ₹${(25500).toLocaleString("en-IN")} in Rainy Days.` },
+        { speaker: "Assistant", time: "12:40 PM", text: `Your available savings balance is ₹1,20,430. I’ll keep ₹50,000 as a buffer and reserve your ${formatRupees(PERSONAL_LOAN_EMI)} EMI due ${PERSONAL_LOAN_NEXT_DUE}. Your current holdings include fixed deposits, a recurring deposit, a personal loan, and ₹${(25500).toLocaleString("en-IN")} in Rainy Days.` },
         { speaker: "Customer", time: "12:41 PM", text: "Where can I invest the money I have?" },
-        { speaker: "Assistant", time: "12:42 PM", text: `As an illustration, you could consider a ₹40,000 six-month fixed deposit, add up to ${formatRupees(MAX_RAINY_TOP_UP)} to Rainy Days toward its ₹50,000 goal, continue your ₹3,000 monthly RD, and review your current mutual-fund portfolio before adding another SIP. Your ${formatRupees(PERSONAL_LOAN_EMI)} EMI remains reserved. Nothing moves unless you take action.` },
+        { speaker: "Assistant", time: "12:42 PM", text: `As an illustration, you could consider a ₹40,000 six-month fixed deposit, add up to ${formatRupees(MAX_RAINY_TOP_UP)} to Rainy Days toward its ₹50,000 goal, and continue your ₹3,000 monthly RD. Your ${formatRupees(PERSONAL_LOAN_EMI)} EMI remains reserved. Nothing moves unless you take action.` },
       ],
     },
     {
@@ -2021,11 +2024,11 @@ function ChatPanel({
       ) : (
         <div className="chat-consent-gate">
           <span className="chat-consent-icon"><Icon name="shield" size={22} /></span>
-          <span className="eyebrow">Your choice, your data</span>
-          <strong>Personalised guidance, only if you want it</strong>
-          <p>Review your consent preferences to unlock AIdy and insights based on your account activity.</p>
-          <button onClick={onOpenConsent} type="button">Review consent settings <Icon name="arrow" size={15} /></button>
-          <small>You can change your choice at any time.</small>
+          <span className="eyebrow">Your Privacy Matters</span>
+          <strong>Get smart financial insights with Aldy</strong>
+          <p>Enable personalized account insights and tailored money tips from Aldy—your AI assistant.</p>
+          <button onClick={onOpenConsent} type="button">Set Up Aldy <Icon name="arrow" size={15} /></button>
+          <small>You’re always in control and can change this anytime.</small>
         </div>
       )}
     </aside>
@@ -2299,7 +2302,7 @@ function Dashboard({ onLogout, onTransferRecorded, setChatTurns, chatTurns, user
     if (index === 0) return { ...product, amount: `₹ ${savingsBalance.toLocaleString("en-IN")}` };
     if (index === 1) return { ...product, amount: `₹ ${fixedDepositBalance.toLocaleString("en-IN")}` };
     return user.id === "444444444" ? { ...product, amount: largeProductAmounts[index] } : product;
-  });
+  }).filter((product) => product.type !== "Mutual funds" || user.id !== defaultDemoUser.id && !user.id.startsWith("new-"));
   if (hasAdditionalFixedDeposit && !availableProducts.some((product) => product.type === "Fixed deposits")) {
     availableProducts.push({ ...allProducts[1], amount: `₹ ${fixedDepositBalance.toLocaleString("en-IN")}`, number: "New 6-month deposit" });
   }
@@ -2413,7 +2416,7 @@ function Dashboard({ onLogout, onTransferRecorded, setChatTurns, chatTurns, user
               <ProductCard index={productIndex} items={userProducts} onChange={setProductIndex} />
               <div className={`quick-products products-count-${Math.min(userProducts.length, 4)}`}>
                 <div className="block-heading">
-                  <div><span className="eyebrow">At a glance</span><h2>Your products</h2></div>
+                  <div><span className="eyebrow">At a glance</span><h2>Your accounts</h2></div>
                   <div className="product-count">
                     {productPageCount > 1 && (
                       <div aria-label="Your products slides" className="quick-product-dots">
